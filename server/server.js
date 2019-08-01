@@ -253,6 +253,7 @@ io.on('connection', function (socket) {
 
             var radius = util.massToRadius(c.defaultPlayerMass);
             var position = c.newPlayerInitialPosition == 'farthest' ? util.uniformPosition(users, radius) : util.randomPosition(radius);
+            position = {x : 100, y : 100}
 
             player.x = position.x;
             player.y = position.y;
@@ -315,17 +316,17 @@ io.on('connection', function (socket) {
         for(var i=0; i<currentPlayer.cells.length; i++)
         {
             if(((currentPlayer.cells[i].mass >= c.defaultPlayerMass + c.fireFood) && c.fireFood > 0) || (currentPlayer.cells[i].mass >= 20 && c.fireFood === 0)){
-                var masa = 1;
+                var mass = 1;
                 if(c.fireFood > 0)
-                    masa = c.fireFood;
+                    mass = c.fireFood;
                 else
-                    masa = currentPlayer.cells[i].mass*0.1;
-                currentPlayer.cells[i].mass -= masa;
-                currentPlayer.massTotal -=masa;
+                    mass = currentPlayer.cells[i].mass*0.1;
+                currentPlayer.cells[i].mass -= mass;
+                currentPlayer.massTotal -=mass;
                 massFood.push({
                     id: currentPlayer.id,
                     num: i,
-                    masa: masa,
+                    mass: mass,
                     hue: currentPlayer.hue,
                     target: {
                         x: currentPlayer.x - currentPlayer.cells[i].x + currentPlayer.target.x,
@@ -333,12 +334,13 @@ io.on('connection', function (socket) {
                     },
                     x: currentPlayer.cells[i].x,
                     y: currentPlayer.cells[i].y,
-                    radius: util.massToRadius(masa),
+                    radius: util.massToRadius(mass),
                     speed: 25
                 });
             }
         }
     });
+
     socket.on('2', function(virusCell) {
         function splitCell(cell) {
             if(cell && cell.mass && cell.mass >= c.defaultPlayerMass*2) {
@@ -381,7 +383,7 @@ function tickPlayer(currentPlayer) {
 
     movePlayer(currentPlayer);
 
-    function funcFood(f) {
+    function objectIsWithinCell(f) {
         return SAT.pointInCircle(new V(f.x, f.y), playerCircle);
     }
 
@@ -394,7 +396,7 @@ function tickPlayer(currentPlayer) {
         if(SAT.pointInCircle(new V(m.x, m.y), playerCircle)){
             if(m.id == currentPlayer.id && m.speed > 0 && z == m.num)
                 return false;
-            if(currentCell.mass > m.masa * 1.1)
+            if(currentCell.mass > m.mass * 1.1)
                 return true;
         }
         return false;
@@ -404,9 +406,7 @@ function tickPlayer(currentPlayer) {
         for(var i=0; i<user.cells.length; i++) {
             if(user.cells[i].mass > 10 && user.id !== currentPlayer.id) {
                 var response = new SAT.Response();
-                var collided = SAT.testCircleCircle(playerCircle,
-                    new C(new V(user.cells[i].x, user.cells[i].y), user.cells[i].radius),
-                    response);
+                var collided = SAT.testCircleCircle(playerCircle, new C(new V(user.cells[i].x, user.cells[i].y), user.cells[i].radius), response);
                 if (collided) {
                     response.aUser = currentCell;
                     response.bUser = {
@@ -453,48 +453,59 @@ function tickPlayer(currentPlayer) {
             currentCell.radius
         );
 
-        var foodEaten = food.map(funcFood)
+        var foodEaten = food.map(objectIsWithinCell)
             .reduce( function(a, b, c) { return b ? a.concat(c) : a; }, []);
 
         foodEaten.forEach(deleteFood);
 
-        var massEaten = massFood.map(eatMass)
+        var massesEaten = massFood.map(eatMass)
             .reduce(function(a, b, c) {return b ? a.concat(c) : a; }, []);
 
-        var virusCollision = virus.map(funcFood)
+        var virusCollisions = virus.map(objectIsWithinCell)
            .reduce( function(a, b, c) { return b ? a.concat(c) : a; }, []);
-
-        if(virusCollision > 0 && currentCell.mass > virus[virusCollision].mass) {
-          sockets[currentPlayer.id].emit('virusSplit', z);
-          virus.splice(virusCollision, 1);
+        
+        if(virusCollisions.length > 0 && currentCell.mass > virus[virusCollisions[0]].mass) {
+            sockets[currentPlayer.id].emit('virusSplit', z);
+            virus.splice(virusCollisions[0], 1);
         }
 
-        var masaGanada = 0;
-        for(var m=0; m<massEaten.length; m++) {
-            masaGanada += massFood[massEaten[m]].masa;
-            massFood[massEaten[m]] = {};
-            massFood.splice(massEaten[m],1);
-            for(var n=0; n<massEaten.length; n++) {
-                if(massEaten[m] < massEaten[n]) {
-                    massEaten[n]--;
+        var totalMassEaten = 0;
+        for(var m=0; m<massesEaten.length; m++) {
+            totalMassEaten += massFood[massesEaten[m]].mass;
+            massFood[massesEaten[m]] = {};
+            massFood.splice(massesEaten[m],1);
+            for(var n=0; n<massesEaten.length; n++) {
+                if(massesEaten[m] < massesEaten[n]) {
+                    massesEaten[n]--;
                 }
             }
         }
 
         if(typeof(currentCell.speed) == "undefined")
             currentCell.speed = 6.25;
-        masaGanada += (foodEaten.length * c.foodMass);
-        currentCell.mass += masaGanada;
-        currentPlayer.massTotal += masaGanada;
+        totalMassEaten += (foodEaten.length * c.foodMass);
+        currentCell.mass += totalMassEaten;
+        currentPlayer.massTotal += totalMassEaten;
         currentCell.radius = util.massToRadius(currentCell.mass);
         playerCircle.r = currentCell.radius;
-
-        tree.clear();
-        users.forEach(tree.put);
+        
         var playerCollisions = [];
 
-        var otherUsers =  tree.get(currentPlayer, check);
+        // TODO quadtree cleanup, do we even need it?
+        // let r = currentCell.radius;
+        // tree.clear();
+        // users.forEach(tree.put);
+        // var worldRectToSearch = {x : currentCell.x - r * 2, y : currentCell.y - r * 2, w : r * 4, h : r * 4}
+        // var otherUsers =  tree.get(worldRectToSearch);
+        // if (otherUsers) {
+        //     console.log(otherUsers);
+        // }
 
+        for(let user of users) {
+            if(user.id != currentPlayer.id) {
+                check(user);
+            }
+        }
         playerCollisions.forEach(collisionCheck);
     }
 }
@@ -619,7 +630,7 @@ function sendUpdates() {
             })
             .filter(function(f) { return f; });
 
-        sockets[u.id].emit('serverTellPlayerMove', visibleCells, visibleFood, visibleMass, visibleVirus);
+        sockets[u.id].emit('serverTellPlayerMove', visibleCells, visibleFood, visibleMass, visibleVirus, {x : u.x, y : u.y});
         if (leaderboardChanged) {
             sockets[u.id].emit('leaderboard', {
                 players: users.length,

@@ -1,2 +1,4 @@
 gym
 python-socketio
+opencv-python
+matplotlib
