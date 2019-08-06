@@ -10,6 +10,4 @@ To install the custom gym environment, cd into the gym-agario folder and run `pi
 
 Server.js line 494, look at quadtree implementation and maybe remove, depending how slow the server runs with lots of connected clients
 
-Update render method inside client.py to look like the real agar.io
-
-Check if feeding viruses works to make the viruses grow and split.
+Feeding viruses is not implemented.
