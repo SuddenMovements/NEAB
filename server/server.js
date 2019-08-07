@@ -282,7 +282,6 @@ io.on('connection', function(socket) {
 				c.newPlayerInitialPosition == 'farthest'
 					? util.uniformPosition(users, radius)
 					: util.randomPosition(radius);
-			position = { x: 100, y: 100 };
 
 			player.x = position.x;
 			player.y = position.y;

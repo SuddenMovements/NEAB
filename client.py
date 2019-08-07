@@ -17,6 +17,7 @@ running = True
 
 cv2.namedWindow("agario")
 cv2.resizeWindow("agario", screenWidth, screenHeight)
+frame = np.full((screenHeight, screenWidth, 3), 255, np.uint8)
 
 
 def mouse_callback(event, x, y, flags, param):
