@@ -46,7 +46,10 @@ function addFood(toAdd) {
 
 function addVirus(toAdd) {
 	while (toAdd--) {
-		var mass = util.randomInRange(c.virus.defaultMass.from, c.virus.defaultMass.to, true);
+		// https://agario.fandom.com/wiki/Virus
+		// A virus has 100 mass
+		// var mass = util.randomInRange(c.virus.defaultMass.from, c.virus.defaultMass.to, true);
+		var mass = 100;
 		var radius = util.massToRadius(mass);
 		var position = c.virusUniformDisposition ? util.uniformPosition(virus, radius) : util.randomPosition(radius);
 		virus.push({
@@ -55,6 +58,7 @@ function addVirus(toAdd) {
 			y: position.y,
 			radius: radius,
 			mass: mass,
+			speed: 0,
 			fill: c.virus.fill,
 			stroke: c.virus.stroke,
 			strokeWidth: c.virus.strokeWidth
@@ -69,6 +73,8 @@ function removeFood(toRem) {
 }
 
 function movePlayer(player) {
+	// https://agario.fandom.com/wiki/Cell
+	// Players' cells constantly move in the direction of the cursor with a slight delay.
 	var x = 0,
 		y = 0;
 	for (var i = 0; i < player.cells.length; i++) {
@@ -76,6 +82,10 @@ function movePlayer(player) {
 			x: player.x - player.cells[i].x + player.target.x,
 			y: player.y - player.cells[i].y + player.target.y
 		};
+		if (player.cells[i].target !== undefined) {
+			target = player.cells[i].target;
+			delete player.cells[i].target;
+		}
 		var dist = Math.sqrt(Math.pow(target.y, 2) + Math.pow(target.x, 2));
 		var deg = Math.atan2(target.y, target.x);
 		var slowDown = 1;
@@ -108,7 +118,9 @@ function movePlayer(player) {
 				);
 				var radiusTotal = player.cells[i].radius + player.cells[j].radius;
 				if (distance < radiusTotal) {
-					if (player.lastSplit > new Date().getTime() - 1000 * c.mergeTimer) {
+					// https://agario.fandom.com/wiki/Splitting
+					// The cool down time is calculated as 30 seconds plus 2.33% of the cells mass
+					if (player.lastSplit > new Date().getTime() - 1000 * (30 + player.cells[i].mass * 0.0233)) {
 						if (player.cells[i].x < player.cells[j].x) {
 							player.cells[i].x--;
 						} else if (player.cells[i].x > player.cells[j].x) {
@@ -149,35 +161,39 @@ function movePlayer(player) {
 	player.y = y / player.cells.length;
 }
 
-function moveMass(mass) {
-	var deg = Math.atan2(mass.target.y, mass.target.x);
-	var deltaY = mass.speed * Math.sin(deg);
-	var deltaX = mass.speed * Math.cos(deg);
+function moveMassOrVirus(entity) {
+	var deg = Math.atan2(entity.target.y, entity.target.x);
+	var deltaY = entity.speed * Math.sin(deg);
+	var deltaX = entity.speed * Math.cos(deg);
 
-	mass.speed -= 0.5;
-	if (mass.speed < 0) {
-		mass.speed = 0;
+	entity.speed -= 0.5;
+	if (entity.speed < 0) {
+		entity.speed = 0;
 	}
 	if (!isNaN(deltaY)) {
-		mass.y += deltaY;
+		entity.y += deltaY;
 	}
 	if (!isNaN(deltaX)) {
-		mass.x += deltaX;
+		entity.x += deltaX;
 	}
 
-	var borderCalc = mass.radius + 5;
+	var borderCalc = entity.radius + 5;
 
-	if (mass.x > c.gameWidth - borderCalc) {
-		mass.x = c.gameWidth - borderCalc;
+	if (entity.x > c.gameWidth - borderCalc) {
+		entity.x = c.gameWidth - borderCalc;
+		entity.target.x *= -1;
 	}
-	if (mass.y > c.gameHeight - borderCalc) {
-		mass.y = c.gameHeight - borderCalc;
+	if (entity.y > c.gameHeight - borderCalc) {
+		entity.y = c.gameHeight - borderCalc;
+		entity.target.y *= -1;
 	}
-	if (mass.x < borderCalc) {
-		mass.x = borderCalc;
+	if (entity.x < borderCalc) {
+		entity.x = borderCalc;
+		entity.target.x *= -1;
 	}
-	if (mass.y < borderCalc) {
-		mass.y = borderCalc;
+	if (entity.y < borderCalc) {
+		entity.y = borderCalc;
+		entity.target.y *= -1;
 	}
 }
 
@@ -326,28 +342,35 @@ io.on('connection', function(socket) {
 
 	socket.on('1', function() {
 		// Fire food.
+		// https://agario.fandom.com/wiki/Ejecting
+		// The ejected mass can be eaten by any cell that is over 20 mass.
+		// Cells lose 18 mass per ejection
+		// however, the mass of the ejected piece is only ~72% of that. Consuming the mass only gains 13 mass.
 		for (var i = 0; i < currentPlayer.cells.length; i++) {
-			if (
-				(currentPlayer.cells[i].mass >= c.defaultPlayerMass + c.fireFood && c.fireFood > 0) ||
-				(currentPlayer.cells[i].mass >= 20 && c.fireFood === 0)
-			) {
-				var mass = 1;
-				if (c.fireFood > 0) mass = c.fireFood;
-				else mass = currentPlayer.cells[i].mass * 0.1;
-				currentPlayer.cells[i].mass -= mass;
-				currentPlayer.massTotal -= mass;
+			if (currentPlayer.cells[i].mass >= c.playerSplitMass) {
+				// var mass = c.fireFood;
+				currentPlayer.cells[i].mass -= 18;
+				currentPlayer.massTotal -= 18;
+				// 'ejected mass has an angle of spread, meaning that Viruses created may veer off course by ~20 degrees'
+				let target = {
+					x: currentPlayer.x - currentPlayer.cells[i].x + currentPlayer.target.x,
+					y: currentPlayer.y - currentPlayer.cells[i].y + currentPlayer.target.y
+				};
+				let mag = Math.sqrt(target.x * target.x + target.y * target.y);
+				let targetAngle = Math.atan2(target.y, target.x) + (Math.random() - 0.5) * Math.PI * 2 * (20 / 360);
+				let spreadTarget = {
+					x: Math.cos(targetAngle) * mag,
+					y: Math.sin(targetAngle) * mag
+				};
 				massFood.push({
 					id: currentPlayer.id,
 					num: i,
-					mass: mass,
+					mass: 13,
 					hue: currentPlayer.hue,
-					target: {
-						x: currentPlayer.x - currentPlayer.cells[i].x + currentPlayer.target.x,
-						y: currentPlayer.y - currentPlayer.cells[i].y + currentPlayer.target.y
-					},
+					target: spreadTarget,
 					x: currentPlayer.cells[i].x,
 					y: currentPlayer.cells[i].y,
-					radius: util.massToRadius(mass),
+					radius: util.massToRadius(13),
 					speed: 25
 				});
 			}
@@ -355,34 +378,55 @@ io.on('connection', function(socket) {
 	});
 
 	socket.on('2', function(virusCell) {
-		function splitCell(cell) {
-			if (cell && cell.mass && cell.mass >= c.defaultPlayerMass * 2) {
+		function splitCell(cell, splitFromVirus) {
+			// https://agario.fandom.com/wiki/Splitting
+			//  'To be able to split, a cell needs to have at least 35 mass'
+			if (currentPlayer.cells.length < c.limitSplit && cell && cell.mass && cell.mass >= c.playerSplitMass) {
 				cell.mass = cell.mass / 2;
 				cell.radius = util.massToRadius(cell.mass);
+				let target = currentPlayer.target;
+				if (splitFromVirus) {
+					target = {
+						x: Math.random() * 2 - 1,
+						y: Math.random() * 2 - 1
+					};
+				}
 				currentPlayer.cells.push({
 					mass: cell.mass,
 					x: cell.x,
 					y: cell.y,
 					radius: cell.radius,
-					speed: 25
+					speed: 25,
+					target: target
 				});
+				currentPlayer.lastSplit = new Date().getTime();
 			}
 		}
-
-		if (currentPlayer.cells.length < c.limitSplit && currentPlayer.massTotal >= c.defaultPlayerMass * 2) {
+		if (virusCell !== false) {
 			//Split single cell from virus
-			if (virusCell) {
-				splitCell(currentPlayer.cells[virusCell]);
-			} else {
-				//Split all cells
-				if (currentPlayer.cells.length < c.limitSplit && currentPlayer.massTotal >= c.defaultPlayerMass * 2) {
-					var numMax = currentPlayer.cells.length;
-					for (var d = 0; d < numMax; d++) {
-						splitCell(currentPlayer.cells[d]);
-					}
+			// https://agario.fandom.com/wiki/Splitting
+			// 'Consuming a virus will cause a player's cell to gain 100 mass'
+			// 'The popped cell will gain +100 mass, but will also pop into 8-16 pieces'
+			currentPlayer.cells[virusCell].mass += 100;
+			let lastCellIndex = currentPlayer.cells.length;
+			let splitCount = Math.round(4 + Math.random());
+			console.log('splitCount ' + splitCount);
+			splitCell(currentPlayer.cells[virusCell], true);
+			for (let i = 1; i < splitCount; i++) {
+				console.log('split ');
+				console.log(i);
+				for (let j = lastCellIndex; j < currentPlayer.cells.length; j++) {
+					splitCell(currentPlayer.cells[j], true);
 				}
+				splitCell(currentPlayer.cells[virusCell], true);
 			}
-			currentPlayer.lastSplit = new Date().getTime();
+		} else {
+			//Split all cells
+			var numCellsToSplit = currentPlayer.cells.length;
+			for (var d = 0; d < numCellsToSplit; d++) {
+				splitCell(currentPlayer.cells[d], false);
+			}
+			// currentPlayer.lastSplit = new Date().getTime();
 		}
 	});
 });
@@ -407,40 +451,22 @@ function tickPlayer(currentPlayer) {
 	function eatMass(m) {
 		if (SAT.pointInCircle(new V(m.x, m.y), playerCircle)) {
 			if (m.id == currentPlayer.id && m.speed > 0 && z == m.num) return false;
+			// 'Any cell that is 10% larger than the ejected mass can consume it'
 			if (currentCell.mass > m.mass * 1.1) return true;
 		}
 		return false;
 	}
 
-	function check(user) {
-		for (var i = 0; i < user.cells.length; i++) {
-			if (user.cells[i].mass > 10 && user.id !== currentPlayer.id) {
-				var response = new SAT.Response();
-				var collided = SAT.testCircleCircle(
-					playerCircle,
-					new C(new V(user.cells[i].x, user.cells[i].y), user.cells[i].radius),
-					response
-				);
-				if (collided) {
-					response.aUser = currentCell;
-					response.bUser = {
-						id: user.id,
-						name: user.name,
-						x: user.cells[i].x,
-						y: user.cells[i].y,
-						num: i,
-						mass: user.cells[i].mass
-					};
-					playerCollisions.push(response);
-				}
-			}
-		}
-		return true;
-	}
-
 	function collisionCheck(collision) {
+		// https://agario.fandom.com/wiki/Splitting
+		// a split cell, unlike a single cell, must be 33% larger than the cell it tries to consume
+		// (a single cell only needs to be 25% bigger than its target)
+		let multiplier = 1.25;
+		if (collision.aCellCount > 1) {
+			multiplier = 1.33;
+		}
 		if (
-			collision.aUser.mass > collision.bUser.mass * 1.1 &&
+			collision.aUser.mass > collision.bUser.mass * multiplier &&
 			collision.aUser.radius >
 				Math.sqrt(
 					Math.pow(collision.aUser.x - collision.bUser.x, 2) +
@@ -524,9 +550,33 @@ function tickPlayer(currentPlayer) {
 
 		for (let user of users) {
 			if (user.id != currentPlayer.id) {
-				check(user);
+				for (var i = 0; i < user.cells.length; i++) {
+					if (user.cells[i].mass > 10 && user.id !== currentPlayer.id) {
+						var response = new SAT.Response();
+						var collided = SAT.testCircleCircle(
+							playerCircle,
+							new C(new V(user.cells[i].x, user.cells[i].y), user.cells[i].radius),
+							response
+						);
+						if (collided) {
+							response.aUser = currentCell;
+							response.aCellCount = currentPlayer.cells.length;
+							response.bUser = {
+								id: user.id,
+								name: user.name,
+								x: user.cells[i].x,
+								y: user.cells[i].y,
+								num: i,
+								mass: user.cells[i].mass
+							};
+							response.bCellCount = user.cells.length;
+							playerCollisions.push(response);
+						}
+					}
+				}
 			}
 		}
+
 		playerCollisions.forEach(collisionCheck);
 	}
 }
@@ -536,7 +586,49 @@ function moveloop() {
 		tickPlayer(users[i]);
 	}
 	for (i = 0; i < massFood.length; i++) {
-		if (massFood[i].speed > 0) moveMass(massFood[i]);
+		if (massFood[i].speed > 0) {
+			moveMassOrVirus(massFood[i]);
+		}
+	}
+	for (i = 0; i < virus.length; i++) {
+		if (virus[i].speed > 0) {
+			moveMassOrVirus(virus[i]);
+		}
+	}
+	// If you eject mass into a virus, the virus will consume the mass and get slightly bigger.
+	// If you eject 7 pellets into a virus, a new virus will be shot out in the direction of the last ejected pellet which was fed to the virus
+	// and the original virus will immediately shrink back to 100 mass.
+	for (i = 0; i < virus.length; i++) {
+		let massesInVirus = massFood.filter(food => {
+			return (
+				Math.pow(food.x - virus[i].x, 2) + Math.pow(food.y - virus[i].y, 2) < virus[i].radius * virus[i].radius
+			);
+		});
+		for (let food of massesInVirus) {
+			virus[i].mass += food.mass;
+			massFood.splice(massFood.indexOf(food), 1);
+			if (virus[i].mass > c.virus.splitMass) {
+				console.log('virus should split!!');
+				let splitDirection = {
+					x: virus[i].x - food.x || Math.random(),
+					y: virus[i].y - food.y || Math.random()
+				};
+				let newVirus = {
+					id: (new Date().getTime() + '' + virus.length) >>> 0,
+					x: virus[i].x,
+					y: virus[i].y,
+					radius: util.massToRadius(100),
+					mass: 100,
+					target: splitDirection,
+					speed: 25,
+					fill: c.virus.fill,
+					stroke: c.virus.stroke,
+					strokeWidth: c.virus.strokeWidth
+				};
+				virus.push(newVirus);
+				virus.mass = 100;
+			}
+		}
 	}
 }
 
@@ -568,13 +660,13 @@ function gameloop() {
 		}
 		for (i = 0; i < users.length; i++) {
 			for (var z = 0; z < users[i].cells.length; z++) {
-				if (
-					users[i].cells[z].mass * (1 - c.massLossRate / 1000) > c.defaultPlayerMass &&
-					users[i].massTotal > c.minMassLoss
-				) {
-					var massLoss = users[i].cells[z].mass * (1 - c.massLossRate / 1000);
-					users[i].massTotal -= users[i].cells[z].mass - massLoss;
-					users[i].cells[z].mass = massLoss;
+				// https://agario.fandom.com/wiki/Cell
+				// Cells lose mass over time, at a rate of 0.2% of their mass per second
+				// in config.json massLossRate is recorded as 0.002
+				let newMass = users[i].cells[z].mass * (1 - c.massLossRate);
+				if (newMass > c.defaultPlayerMass) {
+					users[i].massTotal -= users[i].cells[z].mass - newMass;
+					users[i].cells[z].mass = newMass;
 				}
 			}
 		}
@@ -677,6 +769,7 @@ function sendUpdates() {
 			totalMass: u.massTotal,
 			defaultMass: c.defaultPlayerMass
 		});
+		// console.log(visibleVirus);
 		if (leaderboardChanged) {
 			sockets[u.id].emit('leaderboard', {
 				players: users.length,

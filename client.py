@@ -11,8 +11,8 @@ socket = socketio.Client()
 
 gameWidth = 0
 gameHeight = 0
-screenWidth = 600
-screenHeight = 600
+screenWidth = 700
+screenHeight = 700
 running = True
 
 cv2.namedWindow("agario")
@@ -194,7 +194,7 @@ def render():
         col = list(map(lambda x: int(x * 255), col))
         stroke_col = list(map(lambda x: int(x * 255), stroke_col))
         stroke_weight = int(v["strokeWidth"])
-        spikes = 60
+        spikes = int(v["mass"] / 2)
         frame = cv2.circle(frame, (x, y), r, col, cv2.FILLED)
         for i in range(spikes):
             cv2.ellipse(frame, (x, y), (int(r), int(r / 10)), i / spikes * 360, -3 / spikes * 360, 3 / spikes * 360, stroke_col, stroke_weight)

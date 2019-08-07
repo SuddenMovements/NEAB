@@ -2,10 +2,11 @@
 	"host": "0.0.0.0",
 	"port": 3000,
 	"logpath": "logger.php",
-	"foodMass": 1,
+	"foodMass": 10,
 	"fireFood": 20,
 	"limitSplit": 16,
 	"defaultPlayerMass": 10,
+	"playerSplitMass": 35,
 	"virus": {
 		"fill": "#33ff33",
 		"stroke": "#19D119",
@@ -14,7 +15,7 @@
 			"from": 100,
 			"to": 150
 		},
-		"splitMass": 180
+		"splitMass": 190
 	},
 	"gameWidth": 5000,
 	"gameHeight": 5000,
@@ -29,7 +30,7 @@
 	"foodUniformDisposition": true,
 	"virusUniformDisposition": false,
 	"newPlayerInitialPosition": "farthest",
-	"massLossRate": 1,
+	"massLossRate": 0.002,
 	"minMassLoss": 50,
 	"mergeTimer": 15,
 	"sqlinfo": {

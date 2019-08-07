@@ -10,4 +10,4 @@ To install the custom gym environment, cd into the gym-agario folder and run `pi
 
 Server.js line 494, look at quadtree implementation and maybe remove, depending how slow the server runs with lots of connected clients
 
-Feeding viruses is not implemented.
+In the real game there is some input lag between player mouse movement and cell response. Need to simulate this on the client side for training and then remove this limitation in the future
