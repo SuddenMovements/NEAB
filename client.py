@@ -69,12 +69,8 @@ class AgarioClient:
             print(name, "joined")
 
         @self.socket.event
-        def gameSetup(dimensions):
+        def gameSetup(info):
             self.socket.emit("windowResized", {"screenWidth": self.screenWidth, "screenHeight": self.screenHeight})
-
-        @self.socket.event
-        def welcome(currentPlayer):
-            print("welcome", currentPlayer)
 
         @self.socket.event
         def virusSplit(splitCell):
@@ -119,8 +115,14 @@ class AgarioClient:
 
         @self.socket.event
         def RIP():
-            self.alive = False
-            self.stop()
+            self.socket.emit("respawn")
+            # self.alive = False
+            # self.stop()
+
+        @self.socket.event
+        def welcome(currentPlayer):
+            print("welcome", currentPlayer)
+            connect()
 
     def move(self):
         self.socket.emit("0", self.target)

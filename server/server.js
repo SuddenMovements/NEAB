@@ -300,7 +300,8 @@ io.on('connection', function(socket) {
 
 			socket.emit('gameSetup', {
 				gameWidth: c.gameWidth,
-				gameHeight: c.gameHeight
+				gameHeight: c.gameHeight,
+				playerCount: users.length
 			});
 			console.log('Total players: ' + users.length);
 		}
@@ -602,7 +603,7 @@ function moveloop() {
 			virus[i].mass += food.mass;
 			massFood.splice(massFood.indexOf(food), 1);
 			if (virus[i].mass > c.virus.splitMass) {
-				console.log('virus should split!!');
+				// console.log('virus should split!!');
 				let splitDirection = {
 					x: virus[i].x - food.x || Math.random(),
 					y: virus[i].y - food.y || Math.random()
