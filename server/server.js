@@ -213,9 +213,10 @@ function balanceMass() {
 	var foodDiff = parseInt(massDiff / c.foodMass) - maxFoodDiff;
 	var foodToAdd = Math.min(foodDiff, maxFoodDiff);
 	var foodToRemove = -Math.max(foodDiff, maxFoodDiff);
+	foodToAdd = Math.max(foodToAdd, 200 - food.length);
 
 	if (foodToAdd > 0) {
-		//console.log('[DEBUG] Adding ' + foodToAdd + ' food to level!');
+		console.log('[DEBUG] Adding ' + foodToAdd + ' food to level!');
 		addFood(foodToAdd);
 		//console.log('[DEBUG] Mass rebalanced!');
 	} else if (foodToRemove > 0) {

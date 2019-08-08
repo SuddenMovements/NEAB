@@ -48,6 +48,7 @@ class AgarioClient:
                 self.move()
 
     def stop(self):
+        self.alive = False
         self.socket.disconnect()
         cv2.destroyAllWindows()
 
@@ -118,6 +119,7 @@ class AgarioClient:
             self.socket.emit("respawn")
             # self.alive = False
             # self.stop()
+            # self.start()
 
         @self.socket.event
         def welcome(currentPlayer):
