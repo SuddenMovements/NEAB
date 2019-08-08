@@ -234,29 +234,16 @@ function balanceMass() {
 io.on('connection', function(socket) {
 	console.log('A user connected!', socket.id);
 
-	var radius = util.massToRadius(c.defaultPlayerMass);
-	var position =
-		c.newPlayerInitialPosition == 'farthest' ? util.uniformPosition(users, radius) : util.randomPosition(radius);
-
-	var cells = [
-		{
-			mass: c.defaultPlayerMass,
-			x: position.x,
-			y: position.y,
-			radius: radius
-		}
-	];
-	var massTotal = c.defaultPlayerMass;
-
 	var currentPlayer = {
 		id: socket.id,
-		x: position.x,
-		y: position.y,
+		x: 0,
+		y: 0,
 		w: c.defaultPlayerMass,
 		h: c.defaultPlayerMass,
-		cells: cells,
-		massTotal: massTotal,
+		cells: [],
+		massTotal: 0,
 		hue: Math.round(Math.random() * 360),
+		type: undefined,
 		lastHeartbeat: new Date().getTime(),
 		target: {
 			x: 0,
@@ -274,7 +261,6 @@ io.on('connection', function(socket) {
 			socket.emit('kick', 'Invalid username.');
 			socket.disconnect();
 		} else {
-			console.log('[INFO] Player ' + player.name + ' connected!');
 			sockets[player.id] = socket;
 
 			var radius = util.massToRadius(c.defaultPlayerMass);
@@ -287,15 +273,24 @@ io.on('connection', function(socket) {
 			player.y = position.y;
 			player.target.x = 0;
 			player.target.y = 0;
-			player.cells = [
-				{
-					mass: c.defaultPlayerMass,
-					x: position.x,
-					y: position.y,
-					radius: radius
-				}
-			];
-			player.massTotal = c.defaultPlayerMass;
+			if (player.type === 'player') {
+				console.log('[INFO] Player ' + player.name + ' connected!');
+				player.cells = [
+					{
+						mass: c.defaultPlayerMass,
+						x: position.x,
+						y: position.y,
+						radius: radius
+					}
+				];
+				player.massTotal = c.defaultPlayerMass;
+			} else {
+				console.log('[INFO] Spectator ' + player.name + ' connected!');
+				player.cells = [];
+				player.massTotal = 0;
+				player.x = c.gameWidth / 2;
+				player.y = c.gameHeight / 2;
+			}
 			player.hue = Math.round(Math.random() * 360);
 			currentPlayer = player;
 			currentPlayer.lastHeartbeat = new Date().getTime();
@@ -409,11 +404,11 @@ io.on('connection', function(socket) {
 			currentPlayer.cells[virusCell].mass += 100;
 			let lastCellIndex = currentPlayer.cells.length;
 			let splitCount = Math.round(4 + Math.random());
-			console.log('splitCount ' + splitCount);
+			// console.log('splitCount ' + splitCount);
 			splitCell(currentPlayer.cells[virusCell], true);
 			for (let i = 1; i < splitCount; i++) {
-				console.log('split ');
-				console.log(i);
+				// console.log('split ');
+				// console.log(i);
 				for (let j = lastCellIndex; j < currentPlayer.cells.length; j++) {
 					splitCell(currentPlayer.cells[j], true);
 				}
@@ -675,11 +670,15 @@ function gameloop() {
 
 function sendUpdates() {
 	users.forEach(function(u) {
-		// center the view if x/y is undefined, this will happen for spectators
-		u.x = u.x || c.gameWidth / 2;
-		u.y = u.y || c.gameHeight / 2;
 		let visibleWidth = (u.screenWidth * u.massTotal) / c.defaultPlayerMass + 200;
 		let visibleHeight = (u.screenHeight * u.massTotal) / c.defaultPlayerMass + 200;
+		if (u.type === 'spectator') {
+			u.x = c.gameWidth / 2;
+			u.y = c.gameHeight / 2;
+			visibleWidth = c.gameWidth;
+			visibleHeight = c.gameHeight;
+			u.massTotal = 1000000000;
+		}
 		var visibleFood = food
 			.map(function(f) {
 				if (
