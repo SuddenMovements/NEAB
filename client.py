@@ -55,7 +55,7 @@ class AgarioClient:
     def register_socketio_callbacks(self):
         @self.socket.event
         def connect():
-            print("connection established")
+            print("connection established", self.index)
             name = "player" + str(random.randint(10, 1000000))
             if self.spectator:
                 player = {"name": name, "id": name, "target": {}, "type": "spectator"}
@@ -67,7 +67,8 @@ class AgarioClient:
 
         @self.socket.event
         def playerJoin(name):
-            print(name, "joined")
+            pass
+            # print(name, "joined")
 
         @self.socket.event
         def gameSetup(info):
@@ -75,7 +76,7 @@ class AgarioClient:
 
         @self.socket.event
         def virusSplit(splitCell):
-            print("got virusSplit")
+            # print("got virusSplit")
             self.socket.emit("2", splitCell)
 
         @self.socket.event
@@ -123,18 +124,18 @@ class AgarioClient:
 
         @self.socket.event
         def welcome(currentPlayer):
-            print("welcome", currentPlayer)
+            # print("welcome", currentPlayer)
             connect()
 
     def move(self):
         self.socket.emit("0", self.target)
 
     def fire(self):
-        print("fire")
+        # print("fire")
         self.socket.emit("1")
 
     def split(self):
-        print("split")
+        # print("split")
         self.socket.emit("2", False)
 
     def mouse_callback(self, event, x, y, flags, param):

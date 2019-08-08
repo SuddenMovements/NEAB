@@ -69,6 +69,15 @@ def screenshot_bot(index, screen_size, display_window):
         step += 1
 
 
+def count_images():
+    image_count = 0
+    for dir, subdir, files in os.walk("./game_screenshots"):
+        image_count += len(files)
+    print("got", image_count, "screenshots")
+    sleep(5)
+    count_images()
+
+
 if __name__ == "__main__":
     if os.path.isdir("./game_screenshots"):
         rmtree("./game_screenshots")
@@ -78,4 +87,5 @@ if __name__ == "__main__":
     clients = [(i, 600, False) for i in range(bot_count)]
     for i in range(len(clients)):
         Process(target=screenshot_bot, args=clients[i]).start()
-    AgarioClient(bot_count, 600, True, True, True)
+    Process(target=count_images).start()
+    # AgarioClient(bot_count, 600, True, True, True)
