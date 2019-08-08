@@ -72,7 +72,7 @@ def screenshot_bot(index, screen_size, display_window):
 if __name__ == "__main__":
     if os.path.isdir("./game_screenshots"):
         rmtree("./game_screenshots")
-    bot_count = 10
+    bot_count = 25
     for i in range(bot_count):
         os.makedirs("./game_screenshots/" + str(i))
     clients = [(i, 600, False) for i in range(bot_count)]
