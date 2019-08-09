@@ -9,6 +9,10 @@ from time import sleep
 import os
 from shutil import rmtree
 from cv2 import imwrite
+import numpy as np
+
+frame_save_count = 100
+frame_save_step_interval = 5
 
 
 def move_perlin(index, step):
@@ -57,22 +61,30 @@ def move_smarter(index, step, screen_size, food, cells):
 def screenshot_bot(index, screen_size, display_window):
     step = 0
     client = AgarioClient(index, screen_size, display_window, False)
+    frames = []
+    save_iteration = 0
     while client.alive:
-        # action = move_perlin(index, step)
+        step += 1
         action = move_smarter(index, step, screen_size, client.food, client.cells)
         client.take_action(action)
-        # sleep(0.2)
-        frame = client.render()
-        mass = client.playerMass
-        if step % 5 == 0:
-            imwrite("./game_screenshots/" + str(index) + "/" + str(int(step)) + "_" + str(mass) + ".png", frame)
-        step += 1
+        if step % frame_save_step_interval == 0:
+            frame = client.render()
+            mass = client.playerMass
+            frames.append((frame, mass))
+            # imwrite("./game_screenshots/" + str(index) + "/" + str(int(step)) + "_" + str(int(mass)) + ".png", frame)
+            if step % (frame_save_step_interval * frame_save_count) == 0:
+                np.savez_compressed("./game_screenshots/" + str(index) + "_" + str(save_iteration), *frames)
+                del frames
+                frames = []
+                save_iteration += 1
+        else:
+            sleep(0.2)
 
 
 def count_images():
     image_count = 0
     for dir, subdir, files in os.walk("./game_screenshots"):
-        image_count += len(files)
+        image_count += len(files) * frame_save_count
     print("got", image_count, "screenshots")
     sleep(5)
     count_images()
@@ -81,9 +93,10 @@ def count_images():
 if __name__ == "__main__":
     if os.path.isdir("./game_screenshots"):
         rmtree("./game_screenshots")
+    os.mkdir("./game_screenshots")
     bot_count = 25
-    for i in range(bot_count):
-        os.makedirs("./game_screenshots/" + str(i))
+    # for i in range(bot_count):
+    #     os.makedirs("./game_screenshots/" + str(i))
     clients = [(i, 600, False) for i in range(bot_count)]
     for i in range(len(clients)):
         Process(target=screenshot_bot, args=clients[i]).start()
