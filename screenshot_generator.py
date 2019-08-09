@@ -12,7 +12,7 @@ from cv2 import imwrite
 import numpy as np
 
 frame_save_count = 100
-frame_save_step_interval = 5
+frame_save_step_interval = 1
 
 
 def move_perlin(index, step):
@@ -102,7 +102,7 @@ if __name__ == "__main__":
     if os.path.isdir("./game_screenshots"):
         rmtree("./game_screenshots")
     os.mkdir("./game_screenshots")
-    bot_count = 25
+    bot_count = 10
     # for i in range(bot_count):
     #     os.makedirs("./game_screenshots/" + str(i))
     clients = [(i, 600, False) for i in range(bot_count)]
