@@ -2,17 +2,17 @@ from multiprocessing import Pool, Process
 from client import AgarioClient
 from noise import pnoise2
 from random import random
-from math import tau
-from math import inf
-from math import atan2
+from math import tau, inf, atan2
 from time import sleep
 import os
 from shutil import rmtree
-from cv2 import imwrite
+import cv2
 import numpy as np
+import sys
 
 frame_save_count = 100
 frame_save_step_interval = 1
+frame_size = 900
 
 
 def move_perlin(index, step):
@@ -81,6 +81,27 @@ def screenshot_bot(index, screen_size, display_window):
             sleep(0.2)
 
 
+def video_bot(index, screen_size, display_window):
+    step = 0
+    client = AgarioClient(index, screen_size, display_window, False)
+    out = cv2.VideoWriter("./videos/" + str(index) + "_video.avi", cv2.VideoWriter_fourcc(*"DIVX"), 15, (screen_size, screen_size), True)
+    while client.alive:
+        try:
+            step += 1
+            action = move_smarter(index, step, screen_size, client.food, client.cells)
+            client.take_action(action)
+            frame = client.render()
+            if step < 100:
+                continue
+            out.write(frame)
+            if step % 100 == 0:
+                print(index, "on frame", step)
+        except KeyboardInterrupt:
+            out.release()
+            print(index, "released video safely")
+            sys.exit()
+
+
 prev_image_count = 0
 
 
@@ -101,12 +122,15 @@ def count_images():
 if __name__ == "__main__":
     if os.path.isdir("./game_screenshots"):
         rmtree("./game_screenshots")
+    if os.path.isdir("./videos"):
+        rmtree("./videos")
     os.mkdir("./game_screenshots")
-    bot_count = 10
+    os.mkdir("./videos")
+    bot_count = 5
     # for i in range(bot_count):
     #     os.makedirs("./game_screenshots/" + str(i))
-    clients = [(i, 600, False) for i in range(bot_count)]
+    clients = [(i, frame_size, False) for i in range(bot_count)]
     for i in range(len(clients)):
-        Process(target=screenshot_bot, args=clients[i]).start()
-    Process(target=count_images).start()
-    # AgarioClient(bot_count, 600, True, True, True)
+        Process(target=video_bot, args=clients[i]).start()
+    # Process(target=count_images).start()
+    # AgarioClient(bot_count, frame_size, True, True, True)
