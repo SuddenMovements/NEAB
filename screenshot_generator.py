@@ -81,13 +81,21 @@ def screenshot_bot(index, screen_size, display_window):
             sleep(0.2)
 
 
+prev_image_count = 0
+
+
 def count_images():
     image_count = 0
+    global prev_image_count
     for dir, subdir, files in os.walk("./game_screenshots"):
         image_count += len(files) * frame_save_count
-    print("got", image_count, "screenshots")
-    sleep(5)
-    count_images()
+    if image_count == prev_image_count:
+        sleep(5)
+        count_images()
+    else:
+        print("got", image_count, "screenshots")
+        prev_image_count = image_count
+        count_images()
 
 
 if __name__ == "__main__":
