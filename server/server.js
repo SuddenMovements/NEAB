@@ -1,792 +1,747 @@
-var express = require('express');
-var app = express();
-var http = require('http').Server(app);
-var io = require('socket.io')(http);
-var SAT = require('sat');
-// Import game settings.
-var c = require('./config.json');
+const app = require('express')();
+const http = require('http').Server(app);
+const io = require('socket.io')(http);
+const Quadtree = require('quadtree-lib');
+const shortid = require('shortid');
 
-// Import utilities.
-var util = require('./util');
+const gameWidth = 5000;
+const gameHeight = 5000;
+const simulatedLag = 60;
+const splitMass = 35;
+const updateRate = 60;
+// TODO these speed is currently arbitrary
+const splitSpeed = (60 / updateRate) * 25;
+const maxPlayerSpeed = (60 / updateRate) * 6.25;
 
-// Import quadtree.
-var quadtree = require('simple-quadtree');
+class Player {
+	constructor(socketID, playerType) {
+		this.id = socketID;
+		this.x = Math.round(Math.random() * gameWidth);
+		this.y = Math.round(Math.random() * gameHeight);
+		this.cells = [];
+		this.mass = 0;
+		this.hue = Math.round(Math.random() * 360);
+		this.type = playerType;
+		this.lastTargetUpdate = Date.now();
+		if (this.type === 'player') {
+			this.cells.push(new Cell(this, this.x, this.y, 10, { x: 0, y: 0 }, 0));
+		} else if (this.type === 'spectator') {
+			this.x = gameWidth / 2;
+			this.y = gameHeight / 2;
+		} else {
+			console.log(`[ERROR] user registered with unknown type ${this.type}`);
+		}
+	}
+}
 
-var tree = quadtree(0, 0, c.gameWidth, c.gameHeight);
+class Cell {
+	constructor(player, x, y, mass, target, speed) {
+		this.id = shortid.generate();
+		this.playerID = player.id;
+		this.x = x;
+		this.y = y;
+		this.mass = mass;
+		this.r = massToRadius(this.mass);
+		this.target = target;
+		this.speed = speed;
+		this.hue = player.hue;
+	}
+}
 
-var users = [];
-var massFood = [];
-var food = [];
-var virus = [];
-var sockets = {};
+class Food {
+	constructor(x, y) {
+		this.id = shortid.generate();
+		this.x = x;
+		this.y = y;
+		this.hue = Math.round(Math.random() * 360);
+		this.r = 14;
+		this.mass = 10;
+	}
+}
 
-var leaderboard = [];
-var leaderboardChanged = false;
+class Mass {
+	constructor(playerID, originCellIndex, x, y, hue, target, speed) {
+		this.id = shortid.generate();
+		this.playerID = playerID;
+		this.originCellIndex = originCellIndex;
+		this.x = x;
+		this.y = y;
+		this.mass = 13;
+		this.r = massToRadius(this.mass);
+		this.hue = hue;
+		this.target = target;
+		this.speed = speed;
+	}
+}
 
-var V = SAT.Vector;
-var C = SAT.Circle;
-var initMassLog = util.log(c.defaultPlayerMass, c.slowBase);
+class Virus {
+	constructor(x, y, mass, speed, target) {
+		this.id = shortid.generate();
+		this.x = x;
+		this.y = y;
+		this.mass = mass;
+		this.r = massToRadius(this.mass);
+		this.speed = speed;
+		this.target = target;
+	}
+}
 
-function addFood(toAdd) {
-	// var radius = util.massToRadius(c.foodMass);
-	var radius = 14;
-	while (toAdd--) {
-		var position = c.foodUniformDisposition ? util.uniformPosition(food, radius) : util.randomPosition(radius);
-		food.push({
-			// Make IDs unique.
-			id: (new Date().getTime() + '' + food.length) >>> 0,
-			x: position.x,
-			y: position.y,
-			radius: radius,
-			mass: Math.random() + 2,
-			hue: Math.round(Math.random() * 360)
+// TODO test quadtree removal speeds
+// reject vs remove where
+
+var players = {};
+var spectators = [];
+var food = new Quadtree({ width: gameWidth, height: gameHeight });
+var cells = new Quadtree({ width: gameWidth, height: gameHeight });
+var masses = new Quadtree({ width: gameWidth, height: gameHeight });
+var viruses = new Quadtree({ width: gameWidth, height: gameHeight });
+
+function massToRadius(mass) {
+	return Math.sqrt(mass) * 7.5;
+}
+
+const slowdownBaseLog = Math.log2(4.5);
+function massToSlowdown(mass) {
+	return Math.log2(mass / 10) / slowdownBaseLog + 1;
+}
+
+function getUniformPosition(points) {
+	let bestPos = { x: 0, y: 0 };
+	let bestDist = Infinity;
+	for (let i = 0; i < 10; i++) {
+		let dist = 0;
+		let pos = { x: Math.round(Math.random() * gameWidth), y: Math.round(Math.random() * gameHeight) };
+		for (let point of points) {
+			dist += (point.x - pos.x) * (point.x - pos.x) + (point.y - pos.y) * (point.y - pos.y);
+		}
+		if (dist < bestDist) {
+			bestPos = pos;
+		}
+	}
+	return bestPos;
+}
+
+function addFood(numberFoodToAdd) {
+	// https://www.reddit.com/r/Agario/wiki/cells
+	// Food Cells are tiny passive cells that frequently spawn across the realms at random location.
+	// When spawned they are the size of 1 Mass and slowly over time they can grow to become up to 5 Mass.
+	// Food cells at maximum size can be distinguished by having a dark pulsing outline.
+	// All food cells can be eaten by Player Cells of 10 Mass.
+	if (numberFoodToAdd <= 0) {
+		return [];
+	}
+	// console.log(`[DEBUG] adding ${numberFoodToAdd} food`);
+	let newFood = [];
+	for (let i = 0; i < numberFoodToAdd; i++) {
+		newFood.push(new Food(Math.floor(Math.random() * gameWidth), Math.floor(Math.random() * gameHeight)));
+	}
+	food.pushAll(newFood);
+	return newFood;
+}
+
+function addVirus(numberVirusToAdd) {
+	let newViruses = [];
+	for (let i = 0; i < numberVirusToAdd; i++) {
+		let pos = getUniformPosition(newViruses);
+		newViruses.push(new Virus(pos.x, pos.y, 100, 0, null));
+	}
+	viruses.pushAll(newViruses);
+	return newViruses;
+}
+
+function generateMap() {
+	food.clear();
+	cells.clear();
+	masses.clear();
+	viruses.clear();
+	addFood(1000);
+	addVirus(50);
+}
+
+io.on('connection', socket => {
+	console.log(`${socket.id} connected!`);
+	socket.emit('handshake');
+	var currentPlayer = {};
+	socket.on('handshake', playerInfo => {
+		console.log(`${socket.id} registered as a ${playerInfo.type}`);
+		currentPlayer = new Player(socket.id, playerInfo.type);
+		for (let playerCell of currentPlayer.cells) {
+			cells.push(playerCell);
+		}
+		if (playerInfo.type === 'player') {
+			players[socket.id] = currentPlayer;
+		} else {
+			spectators.push(currentPlayer);
+		}
+		socket.emit('playerInfo', currentPlayer);
+		// on playerInfo client should store player location and mass
+
+		// maybe emit a new player has joined so clients can start tracking new cells?
+		socket.emit('gameSetup', {
+			food: food.find(elem => true),
+			cells: cells.find(elem => true),
+			masses: masses.find(elem => true),
+			viruses: viruses.find(elem => true)
 		});
-	}
-}
+		// on gameSetup client should store food, cells, masses and viruses to be rendered
+		console.log('Total players: ' + Object.keys(players).length);
+	});
 
-function addVirus(toAdd) {
-	while (toAdd--) {
-		// https://agario.fandom.com/wiki/Virus
-		// A virus has 100 mass
-		// var mass = util.randomInRange(c.virus.defaultMass.from, c.virus.defaultMass.to, true);
-		var mass = 100;
-		var radius = util.massToRadius(mass);
-		var position = c.virusUniformDisposition ? util.uniformPosition(virus, radius) : util.randomPosition(radius);
-		virus.push({
-			id: (new Date().getTime() + '' + virus.length) >>> 0,
-			x: position.x,
-			y: position.y,
-			radius: radius,
-			mass: mass,
-			speed: 0,
-			fill: c.virus.fill,
-			stroke: c.virus.stroke,
-			strokeWidth: c.virus.strokeWidth
-		});
-	}
-}
+	socket.on('disconnect', () => {
+		if (players[socket.id] !== undefined) {
+			console.log(`${socket.id} disconnected`);
+			delete players[socket.id];
+			let playerCells = cells.where({ playerID: socket.id });
+			for (let playerCell of playerCells) {
+				cells.remove(playerCell);
+			}
+			console.log('Total players: ' + Object.keys(players).length);
+			// io.emit('playerLeft', socket.id);
+			// on playerLeft client should remove all cells with matching socket.id
+		}
+	});
 
-function removeFood(toRem) {
-	while (toRem--) {
-		food.pop();
-	}
-}
+	socket.on('move', newTarget => {
+		// newTarget should be an object with {x, y}
+		if (currentPlayer.lastTargetUpdate < Date.now() - 1000 / updateRate) {
+			currentPlayer.lastTargetUpdate = Date.now();
+			setTimeout(() => {
+				for (let cell of currentPlayer.cells) {
+					let x = currentPlayer.x + newTarget.x - cell.x;
+					let y = currentPlayer.y + newTarget.y - cell.y;
+					// each cell target is a vector pointing from the cell's position to the mouse
+					if (cells.where({ id: cell.id }).length === 0) {
+						// due to timeout i think cells get updated after being removed from the tree already
+						continue;
+					}
+					cells.remove(cells.where({ id: cell.id })[0]);
+					cell.target = { x: x, y: y };
+					cells.push(cell);
+				}
+			}, simulatedLag);
+		}
+	});
+
+	socket.on('fire', () => {
+		// Fire food.
+		// https://agario.fandom.com/wiki/Ejecting
+		// The ejected mass can be eaten by any cell that is over 20 mass.
+		// Cells lose 18 mass per ejection
+		// however, the mass of the ejected piece is only ~72% of that. Consuming the mass only gains 13 mass.
+		for (let i = 0; i < currentPlayer.cells.length; i++) {
+			if (currentPlayer.cells[i].mass > splitMass) {
+				cells.remove(cells.where({ id: currentPlayer.cells[i].id })[0]);
+				currentPlayer.cells[i].mass -= 18;
+				currentPlayer.cells[i].r = massToRadius(currentPlayer.cells[i].mass);
+				currentPlayer.mass -= 18;
+				cells.push(currentPlayer.cells[i]);
+				// 'ejected mass has an angle of spread, meaning that Viruses created may veer off course by ~20 degrees'
+				let target = currentPlayer.cells[i].target;
+				let deg = Math.atan2(target.y, target.x);
+				let veer = (Math.random() - 0.5) * Math.PI * 2 * (20 / 360);
+				let mag = Math.sqrt(target.x * target.x + target.y * target.y);
+				target.x = mag * Math.cos(deg + veer);
+				target.y = mag * Math.sin(deg + veer);
+				let newMass = new Mass(
+					currentPlayer.id,
+					i,
+					currentPlayer.cells[i].x,
+					currentPlayer.cells[i].y,
+					currentPlayer.hue,
+					target,
+					splitSpeed
+				);
+				masses.push(newMass);
+			}
+		}
+	});
+
+	socket.on('split', () => {
+		function splitCell(cellIndex) {
+			// https://agario.fandom.com/wiki/Splitting
+			//  'To be able to split, a cell needs to have at least 35 mass'
+			if (currentPlayer.cells.length < 16 && currentPlayer.cells[cellIndex].mass >= 35) {
+				cells.remove(cells.where({ id: currentPlayer.cells[cellIndex].id })[0]);
+				currentPlayer.cells[cellIndex].mass = currentPlayer.cells[cellIndex].mass / 2;
+				currentPlayer.cells[cellIndex].r = massToRadius(currentPlayer.cells[cellIndex].mass);
+				cells.push(currentPlayer.cells[cellIndex]);
+				let splitCell = new Cell(
+					currentPlayer,
+					currentPlayer.cells[cellIndex].x,
+					currentPlayer.cells[cellIndex].y,
+					currentPlayer.cells[cellIndex].mass,
+					currentPlayer.cells[cellIndex].target,
+					splitSpeed
+				);
+				currentPlayer.cells.push(splitCell);
+				cells.push(splitCell);
+				currentPlayer.lastSplit = Date.now();
+			}
+		}
+		let splitCount = currentPlayer.cells.length;
+		for (let i = 0; i < splitCount; i++) {
+			splitCell(i);
+		}
+	});
+});
 
 function movePlayer(player) {
-	// https://agario.fandom.com/wiki/Cell
-	// Players' cells constantly move in the direction of the cursor with a slight delay.
-	var x = 0,
-		y = 0;
+	var x = 0;
+	var y = 0;
 	for (var i = 0; i < player.cells.length; i++) {
-		var target = {
-			x: player.x - player.cells[i].x + player.target.x,
-			y: player.y - player.cells[i].y + player.target.y
-		};
-		if (player.cells[i].target !== undefined) {
-			target = player.cells[i].target;
-			delete player.cells[i].target;
-		}
-		var dist = Math.sqrt(Math.pow(target.y, 2) + Math.pow(target.x, 2));
+		cells.remove(cells.where({ id: player.cells[i].id })[0]);
+		let target = player.cells[i].target;
+
+		var dist = Math.pow(target.y, 2) + Math.pow(target.x, 2);
 		var deg = Math.atan2(target.y, target.x);
 		var slowDown = 1;
-		if (player.cells[i].speed <= 6.25) {
-			slowDown = util.log(player.cells[i].mass, c.slowBase) - initMassLog + 1;
+		if (player.cells[i].speed <= maxPlayerSpeed) {
+			if (dist < 10 * 10) {
+				player.cells[i].speed = 0;
+			} else {
+				player.cells[i].speed = maxPlayerSpeed * Math.min(1, (dist - 100) / 5000);
+			}
+			slowDown = massToSlowdown(player.cells[i].mass);
 		}
 
 		var deltaY = (player.cells[i].speed * Math.sin(deg)) / slowDown;
 		var deltaX = (player.cells[i].speed * Math.cos(deg)) / slowDown;
 
-		if (player.cells[i].speed > 6.25) {
+		if (player.cells[i].speed > maxPlayerSpeed) {
 			player.cells[i].speed -= 0.5;
 		}
-		if (dist < 50 + player.cells[i].radius) {
-			deltaY *= dist / (50 + player.cells[i].radius);
-			deltaX *= dist / (50 + player.cells[i].radius);
-		}
-		if (!isNaN(deltaY)) {
+
+		deltaX = Math.round(deltaX);
+		deltaY = Math.round(deltaY);
+
+		if (!isNaN(deltaY) && !isNaN(deltaX)) {
 			player.cells[i].y += deltaY;
-		}
-		if (!isNaN(deltaX)) {
 			player.cells[i].x += deltaX;
 		}
-		// Find best solution.
+
 		for (var j = 0; j < player.cells.length; j++) {
 			if (j != i && player.cells[i] !== undefined) {
 				var distance = Math.sqrt(
 					Math.pow(player.cells[j].y - player.cells[i].y, 2) +
 						Math.pow(player.cells[j].x - player.cells[i].x, 2)
 				);
-				var radiusTotal = player.cells[i].radius + player.cells[j].radius;
+				var radiusTotal = player.cells[i].r + player.cells[j].r;
 				if (distance < radiusTotal) {
 					// https://agario.fandom.com/wiki/Splitting
 					// The cool down time is calculated as 30 seconds plus 2.33% of the cells mass
-					if (player.lastSplit > new Date().getTime() - 1000 * (30 + player.cells[i].mass * 0.0233)) {
+					const cellSpread = 1;
+					if (player.lastSplit > Date.now() - 1000 * (30 + player.cells[i].mass * 0.0233)) {
 						if (player.cells[i].x < player.cells[j].x) {
-							player.cells[i].x--;
+							player.cells[i].x -= cellSpread;
 						} else if (player.cells[i].x > player.cells[j].x) {
-							player.cells[i].x++;
+							player.cells[i].x += cellSpread;
 						}
 						if (player.cells[i].y < player.cells[j].y) {
-							player.cells[i].y--;
+							player.cells[i].y -= cellSpread;
 						} else if (player.cells[i].y > player.cells[j].y) {
-							player.cells[i].y++;
+							player.cells[i].y += cellSpread;
 						}
 					} else if (distance < radiusTotal / 1.75) {
 						player.cells[i].mass += player.cells[j].mass;
-						player.cells[i].radius = util.massToRadius(player.cells[i].mass);
+						player.cells[i].r = massToRadius(player.cells[i].mass);
+						cells.remove(cells.where({ id: player.cells[j].id })[0]);
 						player.cells.splice(j, 1);
+						if (j < i) {
+							i--;
+						}
+						j--;
 					}
 				}
 			}
 		}
-		if (player.cells.length > i) {
-			var borderCalc = player.cells[i].radius / 3;
-			if (player.cells[i].x > c.gameWidth - borderCalc) {
-				player.cells[i].x = c.gameWidth - borderCalc;
-			}
-			if (player.cells[i].y > c.gameHeight - borderCalc) {
-				player.cells[i].y = c.gameHeight - borderCalc;
-			}
-			if (player.cells[i].x < borderCalc) {
-				player.cells[i].x = borderCalc;
-			}
-			if (player.cells[i].y < borderCalc) {
-				player.cells[i].y = borderCalc;
-			}
-			x += player.cells[i].x;
-			y += player.cells[i].y;
+		if (player.cells[i].x < 0) {
+			player.cells[i].x = 0;
+		} else if (player.cells[i].x > gameWidth) {
+			player.cells[i].x = gameWidth;
 		}
-	}
-	player.x = x / player.cells.length;
-	player.y = y / player.cells.length;
-}
-
-function moveMassOrVirus(entity) {
-	var deg = Math.atan2(entity.target.y, entity.target.x);
-	var deltaY = entity.speed * Math.sin(deg);
-	var deltaX = entity.speed * Math.cos(deg);
-
-	entity.speed -= 0.5;
-	if (entity.speed < 0) {
-		entity.speed = 0;
-	}
-	if (!isNaN(deltaY)) {
-		entity.y += deltaY;
-	}
-	if (!isNaN(deltaX)) {
-		entity.x += deltaX;
-	}
-
-	var borderCalc = entity.radius + 5;
-
-	if (entity.x > c.gameWidth - borderCalc) {
-		entity.x = c.gameWidth - borderCalc;
-		entity.target.x *= -1;
-	}
-	if (entity.y > c.gameHeight - borderCalc) {
-		entity.y = c.gameHeight - borderCalc;
-		entity.target.y *= -1;
-	}
-	if (entity.x < borderCalc) {
-		entity.x = borderCalc;
-		entity.target.x *= -1;
-	}
-	if (entity.y < borderCalc) {
-		entity.y = borderCalc;
-		entity.target.y *= -1;
-	}
-}
-
-function balanceMass() {
-	var totalMass =
-		food.length * c.foodMass +
-		users
-			.map(function(u) {
-				return u.massTotal;
-			})
-			.reduce(function(pu, cu) {
-				return pu + cu;
-			}, 0);
-
-	var massDiff = c.gameMass - totalMass;
-	var maxFoodDiff = c.maxFood - food.length;
-	var foodDiff = parseInt(massDiff / c.foodMass) - maxFoodDiff;
-	var foodToAdd = Math.min(foodDiff, maxFoodDiff);
-	var foodToRemove = -Math.max(foodDiff, maxFoodDiff);
-	foodToAdd = Math.max(foodToAdd, 200 - food.length);
-
-	if (foodToAdd > 0) {
-		console.log('[DEBUG] Adding ' + foodToAdd + ' food to level!');
-		addFood(foodToAdd);
-		//console.log('[DEBUG] Mass rebalanced!');
-	} else if (foodToRemove > 0) {
-		//console.log('[DEBUG] Removing ' + foodToRemove + ' food from level!');
-		removeFood(foodToRemove);
-		//console.log('[DEBUG] Mass rebalanced!');
-	}
-
-	var virusToAdd = c.maxVirus - virus.length;
-
-	if (virusToAdd > 0) {
-		addVirus(virusToAdd);
-	}
-}
-
-io.on('connection', function(socket) {
-	console.log('A user connected!', socket.id);
-
-	var currentPlayer = {
-		id: socket.id,
-		x: 0,
-		y: 0,
-		w: c.defaultPlayerMass,
-		h: c.defaultPlayerMass,
-		cells: [],
-		massTotal: 0,
-		hue: Math.round(Math.random() * 360),
-		type: undefined,
-		lastHeartbeat: new Date().getTime(),
-		target: {
-			x: 0,
-			y: 0
+		if (player.cells[i].y < 0) {
+			player.cells[i].y = 0;
+		} else if (player.cells[i].y > gameHeight) {
+			player.cells[i].y = gameHeight;
 		}
-	};
 
-	socket.on('gotit', function(player) {
-		console.log('[INFO] Player ' + player.name + ' connecting!');
+		x += player.cells[i].x;
+		y += player.cells[i].y;
+		cells.push(player.cells[i]);
+	}
+	player.x = Math.round(x / player.cells.length);
+	player.y = Math.round(y / player.cells.length);
+}
 
-		if (util.findIndex(users, player.id) > -1) {
-			console.log('[INFO] Player ID is already connected, kicking.');
-			socket.disconnect();
-		} else if (!util.validNick(player.name)) {
-			socket.emit('kick', 'Invalid username.');
-			socket.disconnect();
-		} else {
-			sockets[player.id] = socket;
-
-			var radius = util.massToRadius(c.defaultPlayerMass);
-			var position =
-				c.newPlayerInitialPosition == 'farthest'
-					? util.uniformPosition(users, radius)
-					: util.randomPosition(radius);
-
-			player.x = position.x;
-			player.y = position.y;
-			player.target.x = 0;
-			player.target.y = 0;
-			if (player.type === 'player') {
-				console.log('[INFO] Player ' + player.name + ' connected!');
-				player.cells = [
-					{
-						mass: c.defaultPlayerMass,
-						x: position.x,
-						y: position.y,
-						radius: radius
-					}
-				];
-				player.massTotal = c.defaultPlayerMass;
-			} else {
-				console.log('[INFO] Spectator ' + player.name + ' connected!');
-				player.cells = [];
-				player.massTotal = 0;
-				player.x = c.gameWidth / 2;
-				player.y = c.gameHeight / 2;
-			}
-			player.hue = Math.round(Math.random() * 360);
-			currentPlayer = player;
-			currentPlayer.lastHeartbeat = new Date().getTime();
-			users.push(currentPlayer);
-
-			io.emit('playerJoin', { name: currentPlayer.name });
-
-			socket.emit('gameSetup', {
-				gameWidth: c.gameWidth,
-				gameHeight: c.gameHeight,
-				playerCount: users.length
+function eatFoodPellets() {
+	// gets all food pellets eaten by players and removes them
+	// returns a list of id's of food objects to be eaten
+	let foodEaten = [];
+	for (let player of Object.values(players)) {
+		for (let i = 0; i < player.cells.length; i++) {
+			let nearbyFood = food.colliding({
+				x: player.cells[i].x - player.cells[i].r,
+				y: player.cells[i].y - player.cells[i].r,
+				width: player.cells[i].r * 2,
+				height: player.cells[i].r * 2
 			});
-			console.log('Total players: ' + users.length);
-		}
-	});
-
-	socket.on('windowResized', function(data) {
-		currentPlayer.screenWidth = data.screenWidth;
-		currentPlayer.screenHeight = data.screenHeight;
-	});
-
-	socket.on('respawn', function() {
-		if (util.findIndex(users, currentPlayer.id) > -1) {
-			users.splice(util.findIndex(users, currentPlayer.id), 1);
-		}
-		socket.emit('welcome', currentPlayer);
-		console.log('[INFO] User ' + currentPlayer.name + ' respawned!');
-	});
-
-	socket.on('disconnect', function() {
-		if (util.findIndex(users, currentPlayer.id) > -1) users.splice(util.findIndex(users, currentPlayer.id), 1);
-		console.log('[INFO] User ' + currentPlayer.name + ' disconnected!');
-
-		socket.broadcast.emit('playerDisconnect', { name: currentPlayer.name });
-	});
-
-	// Heartbeat function, update everytime.
-	socket.on('0', function(target) {
-		currentPlayer.lastHeartbeat = new Date().getTime();
-		if (target.x !== currentPlayer.x || target.y !== currentPlayer.y) {
-			currentPlayer.target = target;
-		}
-	});
-
-	socket.on('1', function() {
-		// Fire food.
-		// https://agario.fandom.com/wiki/Ejecting
-		// The ejected mass can be eaten by any cell that is over 20 mass.
-		// Cells lose 18 mass per ejection
-		// however, the mass of the ejected piece is only ~72% of that. Consuming the mass only gains 13 mass.
-		for (var i = 0; i < currentPlayer.cells.length; i++) {
-			if (currentPlayer.cells[i].mass >= c.playerSplitMass) {
-				// var mass = c.fireFood;
-				currentPlayer.cells[i].mass -= 18;
-				currentPlayer.massTotal -= 18;
-				// 'ejected mass has an angle of spread, meaning that Viruses created may veer off course by ~20 degrees'
-				let target = {
-					x: currentPlayer.x - currentPlayer.cells[i].x + currentPlayer.target.x,
-					y: currentPlayer.y - currentPlayer.cells[i].y + currentPlayer.target.y
-				};
-				let mag = Math.sqrt(target.x * target.x + target.y * target.y);
-				let targetAngle = Math.atan2(target.y, target.x) + (Math.random() - 0.5) * Math.PI * 2 * (20 / 360);
-				let spreadTarget = {
-					x: Math.cos(targetAngle) * mag,
-					y: Math.sin(targetAngle) * mag
-				};
-				massFood.push({
-					id: currentPlayer.id,
-					num: i,
-					mass: 13,
-					hue: currentPlayer.hue,
-					target: spreadTarget,
-					x: currentPlayer.cells[i].x,
-					y: currentPlayer.cells[i].y,
-					radius: util.massToRadius(13),
-					speed: 25
-				});
-			}
-		}
-	});
-
-	socket.on('2', function(virusCell) {
-		function splitCell(cell, splitFromVirus) {
-			// https://agario.fandom.com/wiki/Splitting
-			//  'To be able to split, a cell needs to have at least 35 mass'
-			if (currentPlayer.cells.length < c.limitSplit && cell && cell.mass && cell.mass >= c.playerSplitMass) {
-				cell.mass = cell.mass / 2;
-				cell.radius = util.massToRadius(cell.mass);
-				let target = currentPlayer.target;
-				if (splitFromVirus) {
-					target = {
-						x: Math.random() * 2 - 1,
-						y: Math.random() * 2 - 1
-					};
+			if (nearbyFood.length > 0) {
+				// console.log(`[DEBUG] ${player.id} colliding with food ${nearbyFood[0].id}`);
+				// for (let f of nearbyFood) {
+				let f = nearbyFood[0];
+				{
+					if (
+						(f.x - player.cells[i].x) * (f.x - player.cells[i].x) +
+							(f.y - player.cells[i].y) * (f.y - player.cells[i].y) <
+						player.cells[i].r * player.cells[i].r
+					) {
+						foodEaten.push(f.id);
+						cells.remove(cells.where({ id: player.cells[i].id })[0]);
+						player.cells[i].mass += f.mass;
+						player.cells[i].r = massToRadius(player.cells[i].mass);
+						player.mass += f.mass;
+						cells.push(player.cells[i]);
+						food.remove(food.where({ id: f.id })[0]);
+					}
 				}
-				currentPlayer.cells.push({
-					mass: cell.mass,
-					x: cell.x,
-					y: cell.y,
-					radius: cell.radius,
-					speed: 25,
-					target: target
-				});
-				currentPlayer.lastSplit = new Date().getTime();
 			}
 		}
-		if (virusCell !== false) {
-			//Split single cell from virus
-			// https://agario.fandom.com/wiki/Splitting
-			// 'Consuming a virus will cause a player's cell to gain 100 mass'
-			// 'The popped cell will gain +100 mass, but will also pop into 8-16 pieces'
-			currentPlayer.cells[virusCell].mass += 100;
-			let lastCellIndex = currentPlayer.cells.length;
-			let splitCount = Math.round(4 + Math.random());
-			// console.log('splitCount ' + splitCount);
-			splitCell(currentPlayer.cells[virusCell], true);
-			for (let i = 1; i < splitCount; i++) {
-				// console.log('split ');
-				// console.log(i);
-				for (let j = lastCellIndex; j < currentPlayer.cells.length; j++) {
-					splitCell(currentPlayer.cells[j], true);
+	}
+	return foodEaten;
+}
+
+function moveMasses() {
+	let movingMasses = masses.find(elem => elem.speed > 0);
+	for (let mass of movingMasses) {
+		masses.remove(masses.where({ id: mass.id })[0]);
+		let deg = Math.atan2(mass.target.y, mass.target.x);
+		// TODO change masses to only use degrees
+		let deltaX = mass.speed * Math.cos(deg);
+		let deltaY = mass.speed * Math.sin(deg);
+
+		mass.speed -= 0.5;
+		if (mass.speed < 0) {
+			mass.speed = 0;
+		}
+
+		if (!isNaN(deltaX) && !isNaN(deltaY)) {
+			mass.x += deltaX;
+			mass.y += deltaY;
+		}
+
+		mass.x = Math.round(mass.x);
+		mass.y = Math.round(mass.y);
+		masses.push(mass);
+	}
+	return movingMasses;
+}
+
+function eatMasses() {
+	// returns a list of id's of mass objects to be eaten
+	let massEaten = [];
+	for (let player of Object.values(players)) {
+		for (let i = 0; i < player.cells.length; i++) {
+			let nearbyMass = masses.colliding({
+				x: player.cells[i].x - player.cells[i].r,
+				y: player.cells[i].y - player.cells[i].r,
+				width: player.cells[i].r * 2,
+				height: player.cells[i].r * 2
+			});
+			if (nearbyMass.length > 0) {
+				// console.log(`[DEBUG] ${player.id} colliding with mass ${nearbyMass[0].id}`);
+				for (let m of nearbyMass) {
+					if (
+						(m.x - player.cells[i].x) * (m.x - player.cells[i].x) +
+							(m.y - player.cells[i].y) * (m.y - player.cells[i].y) <
+						player.cells[i].r * player.cells[i].r
+					) {
+						// to make sure we don't eat the mass we just ejected
+						if (m.playerID === player.id) {
+							if (m.originCellIndex === i && m.speed > 0) {
+								continue;
+							}
+						}
+						massEaten.push(m.id);
+						cells.remove(cells.where({ id: player.cells[i].id })[0]);
+						player.cells[i].mass += m.mass;
+						player.mass += m.mass;
+						player.cells[i].r = massToRadius(player.cells[i].mass);
+						cells.push(player.cells[i]);
+						masses.remove(m);
+					}
 				}
-				splitCell(currentPlayer.cells[virusCell], true);
 			}
-		} else {
-			//Split all cells
-			var numCellsToSplit = currentPlayer.cells.length;
-			for (var d = 0; d < numCellsToSplit; d++) {
-				splitCell(currentPlayer.cells[d], false);
+		}
+	}
+
+	for (let virus of viruses.find(elem => true)) {
+		let nearbyMass = masses.colliding({
+			x: virus.x - virus.r,
+			y: virus.y - virus.r,
+			width: virus.r * 2,
+			height: virus.r * 2
+		});
+		if (nearbyMass.length > 0) {
+			// console.log(`[DEBUG] ${player.id} colliding with mass ${nearbyMass[0].id}`);
+			for (let m of nearbyMass) {
+				if ((m.x - virus.x) * (m.x - virus.x) + (m.y - virus.y) * (m.y - virus.y) < virus.r * virus.r) {
+					viruses.remove(viruses.where({ id: virus.id })[0]);
+					virus.mass += m.mass;
+					virus.r = massToRadius(virus.mass);
+					virus.target = { x: virus.x - m.x, y: virus.y - m.y };
+					viruses.push(virus);
+					updatedViruses[virus.id] = virus;
+					masses.remove(m);
+					massEaten.push(m.id);
+				}
 			}
-			// currentPlayer.lastSplit = new Date().getTime();
 		}
-	});
-});
-
-function tickPlayer(currentPlayer) {
-	if (currentPlayer.lastHeartbeat < new Date().getTime() - c.maxHeartbeatInterval) {
-		sockets[currentPlayer.id].emit('kick', 'Last heartbeat received over ' + c.maxHeartbeatInterval + ' ago.');
-		sockets[currentPlayer.id].disconnect();
 	}
+	return massEaten;
+}
 
-	movePlayer(currentPlayer);
+function updateViruses() {
+	// let updatedViruses = [];
+	let locallyUpdatedViruses = [];
+	let movingViruses = viruses.find(elem => elem.speed > 0);
+	for (let virus of movingViruses) {
+		viruses.remove(viruses.where({ id: virus.id })[0]);
+		let deg = Math.atan2(virus.target.y, virus.target.x);
+		let deltaX = virus.speed * Math.cos(deg);
+		let deltaY = virus.speed * Math.sin(deg);
 
-	function objectIsWithinCell(f) {
-		return SAT.pointInCircle(new V(f.x, f.y), playerCircle);
-	}
-
-	function deleteFood(f) {
-		food[f] = {};
-		food.splice(f, 1);
-	}
-
-	function eatMass(m) {
-		if (SAT.pointInCircle(new V(m.x, m.y), playerCircle)) {
-			if (m.id == currentPlayer.id && m.speed > 0 && z == m.num) return false;
-			// 'Any cell that is 10% larger than the ejected mass can consume it'
-			if (currentCell.mass > m.mass * 1.1) return true;
+		virus.speed -= 0.5;
+		if (virus.speed < 0) {
+			virus.speed = 0;
 		}
-		return false;
+
+		if (!isNaN(deltaX)) {
+			virus.x += deltaX;
+		}
+		if (!isNaN(deltaY)) {
+			virus.y += deltaY;
+		}
+
+		virus.x = Math.round(virus.x);
+		virus.y = Math.round(virus.y);
+		viruses.push(virus);
+	}
+	locallyUpdatedViruses = locallyUpdatedViruses.concat(movingViruses);
+
+	let fullViruses = viruses.find(elem => elem.mass > 190);
+	for (let virus of fullViruses) {
+		let newVirus = new Virus(virus.x, virus.y, 100, splitSpeed, virus.target);
+		locallyUpdatedViruses.push(newVirus);
+		viruses.push(newVirus);
+		viruses.remove(viruses.where({ id: virus.id })[0]);
+		virus.mass = 100;
+		virus.r = 75;
+		virus.target = { x: 0, y: 0 };
+		viruses.push(virus);
+		locallyUpdatedViruses.push(virus);
 	}
 
-	function collisionCheck(collision) {
+	return locallyUpdatedViruses;
+}
+
+function eatViruses() {
+	function virusSplitCell(player, cell) {
+		if (player.cells.length < 16 && cell.mass >= 35) {
+			let target = {
+				x: (Math.random() * 2 - 1) * 500,
+				y: (Math.random() * 2 - 1) * 500
+			};
+			cells.remove(cells.where({ id: cell.id })[0]);
+			cell.mass = cell.mass / 2;
+			cell.r = massToRadius(cell.mass);
+			cell.target = target;
+			cells.push(cell);
+			target = {
+				x: (Math.random() * 2 - 1) * 500,
+				y: (Math.random() * 2 - 1) * 500
+			};
+			let splitCell = new Cell(player, cell.x, cell.y, cell.mass, target, splitSpeed);
+			player.cells.push(splitCell);
+			cells.push(splitCell);
+			player.lastSplit = Date.now();
+		}
+	}
+	// returns a list of id's of virus objects to be eaten
+	let virusEaten = [];
+	for (let player of Object.values(players)) {
+		for (let i = 0; i < player.cells.length; i++) {
+			let nearbyViruses = viruses.colliding({
+				x: player.cells[i].x - player.cells[i].r,
+				y: player.cells[i].y - player.cells[i].r,
+				width: player.cells[i].r * 2,
+				height: player.cells[i].r * 2
+			});
+			if (nearbyViruses.length > 0) {
+				// console.log(`[DEBUG] ${player.id} colliding with mass ${nearbyViruses[0].id}`);
+				for (let v of nearbyViruses) {
+					if (
+						(v.x - player.cells[i].x) * (v.x - player.cells[i].x) +
+							(v.y - player.cells[i].y) * (v.y - player.cells[i].y) <
+						player.cells[i].r * player.cells[i].r
+					) {
+						if (v.mass < player.cells[i].mass) {
+							virusEaten.push(v.id);
+							cells.remove(cells.where({ id: player.cells[i].id })[0]);
+							player.cells[i].mass += 100;
+							player.cells[i].r = massToRadius(player.cells[i].mass);
+							player.mass += 100;
+							cells.push(player.cells[i]);
+
+							let lastCellIndex = player.cells.length;
+							let splitCount = Math.round(4 + Math.random());
+							virusSplitCell(player, player.cells[i]);
+							for (let j = 1; j < splitCount; j++) {
+								let splitRound = player.cells.length;
+								for (let k = lastCellIndex; k < splitRound; k++) {
+									virusSplitCell(player, player.cells[k]);
+								}
+								virusSplitCell(player, player.cells[i]);
+							}
+							viruses.remove(viruses.where({ id: v.id })[0]);
+						}
+					}
+				}
+			}
+		}
+	}
+	return virusEaten;
+}
+
+function playerCollisions() {
+	for (let player of Object.values(players)) {
 		// https://agario.fandom.com/wiki/Splitting
 		// a split cell, unlike a single cell, must be 33% larger than the cell it tries to consume
 		// (a single cell only needs to be 25% bigger than its target)
 		let multiplier = 1.25;
-		if (collision.aCellCount > 1) {
+		if (player.cells.length > 1) {
 			multiplier = 1.33;
 		}
-		if (
-			collision.aUser.mass > collision.bUser.mass * multiplier &&
-			collision.aUser.radius >
-				Math.sqrt(
-					Math.pow(collision.aUser.x - collision.bUser.x, 2) +
-						Math.pow(collision.aUser.y - collision.bUser.y, 2)
-				) *
-					1.75
-		) {
-			console.log('[DEBUG] Killing user: ' + collision.bUser.id);
-			console.log('[DEBUG] Collision info:');
-			console.log(collision);
-
-			var numUser = util.findIndex(users, collision.bUser.id);
-			if (numUser > -1) {
-				if (users[numUser].cells.length > 1) {
-					users[numUser].massTotal -= collision.bUser.mass;
-					users[numUser].cells.splice(collision.bUser.num, 1);
-				} else {
-					users.splice(numUser, 1);
-					io.emit('playerDied', { name: collision.bUser.name });
-					sockets[collision.bUser.id].emit('RIP');
-				}
-			}
-			currentPlayer.massTotal += collision.bUser.mass;
-			collision.aUser.mass += collision.bUser.mass;
-		}
-	}
-
-	for (var z = 0; z < currentPlayer.cells.length; z++) {
-		var currentCell = currentPlayer.cells[z];
-		var playerCircle = new C(new V(currentCell.x, currentCell.y), currentCell.radius);
-
-		var foodEaten = food.map(objectIsWithinCell).reduce(function(a, b, c) {
-			return b ? a.concat(c) : a;
-		}, []);
-
-		foodEaten.forEach(deleteFood);
-
-		var massesEaten = massFood.map(eatMass).reduce(function(a, b, c) {
-			return b ? a.concat(c) : a;
-		}, []);
-
-		var virusCollisions = virus.map(objectIsWithinCell).reduce(function(a, b, c) {
-			return b ? a.concat(c) : a;
-		}, []);
-
-		if (virusCollisions.length > 0 && currentCell.mass > virus[virusCollisions[0]].mass) {
-			sockets[currentPlayer.id].emit('virusSplit', z);
-			virus.splice(virusCollisions[0], 1);
-		}
-
-		var totalMassEaten = 0;
-		for (var m = 0; m < massesEaten.length; m++) {
-			totalMassEaten += massFood[massesEaten[m]].mass;
-			massFood[massesEaten[m]] = {};
-			massFood.splice(massesEaten[m], 1);
-			for (var n = 0; n < massesEaten.length; n++) {
-				if (massesEaten[m] < massesEaten[n]) {
-					massesEaten[n]--;
-				}
-			}
-		}
-
-		if (typeof currentCell.speed == 'undefined') currentCell.speed = 6.25;
-		totalMassEaten += foodEaten.length * c.foodMass;
-		currentCell.mass += totalMassEaten;
-		currentPlayer.massTotal += totalMassEaten;
-		currentCell.radius = util.massToRadius(currentCell.mass);
-		playerCircle.r = currentCell.radius;
-
-		var playerCollisions = [];
-
-		// TODO quadtree cleanup, do we even need it?
-		// let r = currentCell.radius;
-		// tree.clear();
-		// users.forEach(tree.put);
-		// var worldRectToSearch = {x : currentCell.x - r * 2, y : currentCell.y - r * 2, w : r * 4, h : r * 4}
-		// var otherUsers =  tree.get(worldRectToSearch);
-		// if (otherUsers) {
-		//     console.log(otherUsers);
-		// }
-
-		for (let user of users) {
-			if (user.id != currentPlayer.id) {
-				for (var i = 0; i < user.cells.length; i++) {
-					if (user.cells[i].mass > 10 && user.id !== currentPlayer.id) {
-						var response = new SAT.Response();
-						var collided = SAT.testCircleCircle(
-							playerCircle,
-							new C(new V(user.cells[i].x, user.cells[i].y), user.cells[i].radius),
-							response
-						);
-						if (collided) {
-							response.aUser = currentCell;
-							response.aCellCount = currentPlayer.cells.length;
-							response.bUser = {
-								id: user.id,
-								name: user.name,
-								x: user.cells[i].x,
-								y: user.cells[i].y,
-								num: i,
-								mass: user.cells[i].mass
-							};
-							response.bCellCount = user.cells.length;
-							playerCollisions.push(response);
-						}
-					}
-				}
-			}
-		}
-
-		playerCollisions.forEach(collisionCheck);
-	}
-}
-
-function moveloop() {
-	for (var i = 0; i < users.length; i++) {
-		tickPlayer(users[i]);
-	}
-	for (i = 0; i < massFood.length; i++) {
-		if (massFood[i].speed > 0) {
-			moveMassOrVirus(massFood[i]);
-		}
-	}
-	for (i = 0; i < virus.length; i++) {
-		if (virus[i].speed > 0) {
-			moveMassOrVirus(virus[i]);
-		}
-	}
-	// If you eject mass into a virus, the virus will consume the mass and get slightly bigger.
-	// If you eject 7 pellets into a virus, a new virus will be shot out in the direction of the last ejected pellet which was fed to the virus
-	// and the original virus will immediately shrink back to 100 mass.
-	for (i = 0; i < virus.length; i++) {
-		let massesInVirus = massFood.filter(food => {
-			return (
-				Math.pow(food.x - virus[i].x, 2) + Math.pow(food.y - virus[i].y, 2) < virus[i].radius * virus[i].radius
-			);
-		});
-		for (let food of massesInVirus) {
-			virus[i].mass += food.mass;
-			massFood.splice(massFood.indexOf(food), 1);
-			if (virus[i].mass > c.virus.splitMass) {
-				// console.log('virus should split!!');
-				let splitDirection = {
-					x: virus[i].x - food.x || Math.random(),
-					y: virus[i].y - food.y || Math.random()
-				};
-				let newVirus = {
-					id: (new Date().getTime() + '' + virus.length) >>> 0,
-					x: virus[i].x,
-					y: virus[i].y,
-					radius: util.massToRadius(100),
-					mass: 100,
-					target: splitDirection,
-					speed: 25,
-					fill: c.virus.fill,
-					stroke: c.virus.stroke,
-					strokeWidth: c.virus.strokeWidth
-				};
-				virus.push(newVirus);
-				virus.mass = 100;
-			}
-		}
-	}
-}
-
-function gameloop() {
-	if (users.length > 0) {
-		users.sort(function(a, b) {
-			return b.massTotal - a.massTotal;
-		});
-
-		var topUsers = [];
-
-		for (var i = 0; i < Math.min(10, users.length); i++) {
-			topUsers.push({
-				id: users[i].id,
-				name: users[i].name
+		for (let i = 0; i < player.cells.length; i++) {
+			let nearbyCells = cells.colliding({
+				x: player.cells[i].x - player.cells[i].r,
+				y: player.cells[i].y - player.cells[i].r,
+				width: player.cells[i].r * 2,
+				height: player.cells[i].r * 2
 			});
-		}
-		if (isNaN(leaderboard) || leaderboard.length !== topUsers.length) {
-			leaderboard = topUsers;
-			leaderboardChanged = true;
-		} else {
-			for (i = 0; i < leaderboard.length; i++) {
-				if (leaderboard[i].id !== topUsers[i].id) {
-					leaderboard = topUsers;
-					leaderboardChanged = true;
-					break;
+			for (let otherCell of nearbyCells) {
+				if (otherCell.playerID === player.id) {
+					continue;
 				}
-			}
-		}
-		for (i = 0; i < users.length; i++) {
-			for (var z = 0; z < users[i].cells.length; z++) {
-				// https://agario.fandom.com/wiki/Cell
-				// Cells lose mass over time, at a rate of 0.2% of their mass per second
-				// in config.json massLossRate is recorded as 0.002
-				let newMass = users[i].cells[z].mass * (1 - c.massLossRate);
-				if (newMass > c.defaultPlayerMass) {
-					users[i].massTotal -= users[i].cells[z].mass - newMass;
-					users[i].cells[z].mass = newMass;
-				}
-			}
-		}
-	}
-	balanceMass();
-}
-
-function sendUpdates() {
-	users.forEach(function(u) {
-		let visibleWidth = (u.screenWidth * u.massTotal) / c.defaultPlayerMass + 200;
-		let visibleHeight = (u.screenHeight * u.massTotal) / c.defaultPlayerMass + 200;
-		if (u.type === 'spectator') {
-			u.x = c.gameWidth / 2;
-			u.y = c.gameHeight / 2;
-			visibleWidth = c.gameWidth;
-			visibleHeight = c.gameHeight;
-			u.massTotal = 1000000000;
-		}
-		var visibleFood = food
-			.map(function(f) {
-				if (
-					f.x > u.x - visibleWidth / 2 - 20 &&
-					f.x < u.x + visibleWidth / 2 + 20 &&
-					f.y > u.y - visibleHeight / 2 - 20 &&
-					f.y < u.y + visibleHeight / 2 + 20
-				) {
-					return f;
-				}
-			})
-			.filter(function(f) {
-				return f;
-			});
-
-		var visibleVirus = virus
-			.map(function(f) {
-				if (
-					f.x > u.x - visibleWidth / 2 - f.radius &&
-					f.x < u.x + visibleWidth / 2 + f.radius &&
-					f.y > u.y - visibleHeight / 2 - f.radius &&
-					f.y < u.y + visibleHeight / 2 + f.radius
-				) {
-					return f;
-				}
-			})
-			.filter(function(f) {
-				return f;
-			});
-
-		var visibleMass = massFood
-			.map(function(f) {
-				if (
-					f.x + f.radius > u.x - visibleWidth / 2 - 20 &&
-					f.x - f.radius < u.x + visibleWidth / 2 + 20 &&
-					f.y + f.radius > u.y - visibleHeight / 2 - 20 &&
-					f.y - f.radius < u.y + visibleHeight / 2 + 20
-				) {
-					return f;
-				}
-			})
-			.filter(function(f) {
-				return f;
-			});
-
-		var visibleCells = users
-			.map(function(f) {
-				for (var z = 0; z < f.cells.length; z++) {
+				if (player.cells[i].mass > multiplier * otherCell.mass) {
 					if (
-						f.cells[z].x + f.cells[z].radius > u.x - visibleWidth / 2 - 20 &&
-						f.cells[z].x - f.cells[z].radius < u.x + visibleWidth / 2 + 20 &&
-						f.cells[z].y + f.cells[z].radius > u.y - visibleHeight / 2 - 20 &&
-						f.cells[z].y - f.cells[z].radius < u.y + visibleHeight / 2 + 20
+						(player.cells[i].x - otherCell.x) * (player.cells[i].x - otherCell.x) +
+							(player.cells[i].y - otherCell.y) * (player.cells[i].y - otherCell.y) <
+						player.cells[i].r * player.cells[i].r * 1.1
 					) {
-						z = f.cells.lenth;
-						if (f.id !== u.id) {
-							return {
-								id: f.id,
-								x: f.x,
-								y: f.y,
-								cells: f.cells,
-								massTotal: Math.round(f.massTotal),
-								hue: f.hue,
-								name: f.name
-							};
-						} else {
-							//console.log("Nombre: " + f.name + " Es Usuario");
-							return {
-								x: f.x,
-								y: f.y,
-								cells: f.cells,
-								massTotal: Math.round(f.massTotal),
-								hue: f.hue
-							};
+						cells.remove(cells.where({ id: player.cells[i].id })[0]);
+						player.cells[i].mass += otherCell.mass;
+						player.cells[i].r = massToRadius(player.cells[i].mass);
+						player.mass += otherCell.mass;
+						cells.push(player.cells[i]);
+						players[otherCell.playerID].cells.splice(
+							players[otherCell.playerID].cells.indexOf(otherCell),
+							1
+						);
+						if (players[otherCell.playerID].cells.length === 0) {
+							io.to(otherCell.playerID).emit('dead');
 						}
+						cells.remove(cells.where({ id: otherCell.id })[0]);
 					}
 				}
-			})
-			.filter(function(f) {
-				return f;
-			});
-
-		sockets[u.id].emit('serverTellPlayerMove', visibleCells, visibleFood, visibleMass, visibleVirus, {
-			x: u.x,
-			y: u.y,
-			totalMass: u.massTotal,
-			defaultMass: c.defaultPlayerMass
-		});
-		// console.log(visibleVirus);
-		if (leaderboardChanged) {
-			sockets[u.id].emit('leaderboard', {
-				players: users.length,
-				leaderboard: leaderboard
-			});
+			}
 		}
-	});
-	leaderboardChanged = false;
+	}
 }
 
-setInterval(moveloop, 1000 / 60);
-setInterval(gameloop, 1000);
-setInterval(sendUpdates, 1000 / c.networkUpdateFactor);
+let tickCount = 0;
+let foodDeleted = [];
+let foodAdded = {};
+let massesDeleted = [];
+let updatedMasses = {};
+let virusesDeleted = [];
+let updatedViruses = {};
+
+function tick() {
+	// in tick
+	// move all players
+	for (let player of Object.values(players)) {
+		movePlayer(player);
+	}
+	// eat food
+	foodDeleted = foodDeleted.concat(eatFoodPellets());
+	for (let f of addFood(1000 - food.find(elem => true).length)) {
+		foodAdded[f.id] = f;
+	}
+
+	// move and eat masses
+	for (let m of moveMasses()) {
+		updatedMasses[m.id] = m;
+	}
+	massesDeleted = massesDeleted.concat(eatMasses());
+
+	// move and eat viruses
+	for (let v of updateViruses()) {
+		updatedViruses[v.id] = v;
+	}
+	virusesDeleted = virusesDeleted.concat(eatViruses());
+
+	// and finally check for player on player collisions and eat appropriately
+	playerCollisions();
+	tickCount++;
+	if (tickCount % Math.floor(updateRate / 20) == 0) {
+		sendGameUpdatesToAllPlayers();
+	}
+}
+
+function sendGameUpdatesToAllPlayers() {
+	function sendGameUpdates(player) {
+		io.to(player.id).emit('gameUpdate', {
+			playerCoords: { x: player.x, y: player.y },
+			playerMass: player.mass,
+			cells: cells.find(elem => true),
+			deleteFood: foodDeleted,
+			addFood: foodAdded,
+			deleteMass: massesDeleted,
+			updateMass: updatedMasses,
+			deleteVirus: virusesDeleted,
+			updateVirus: updatedViruses
+		});
+	}
+	// any masses or viruses that get added will be included in update dictionaries
+
+	// send players new information
+	for (let player of Object.values(players)) {
+		sendGameUpdates(player);
+	}
+	for (let spectator of spectators) {
+		sendGameUpdates(spectator);
+	}
+	foodDeleted = [];
+	foodAdded = {};
+	massesDeleted = [];
+	updatedMasses = {};
+	virusesDeleted = [];
+	updatedViruses = {};
+}
+
+generateMap();
+
+setInterval(() => {
+	tick();
+}, 1000 / updateRate);
+
+// setInterval(() => {
+// 	temp();
+// }, 1000 / 20);
 
 // Don't touch, IP configurations.
-var ipaddress = process.env.OPENSHIFT_NODEJS_IP || process.env.IP || c.host;
-var serverport = process.env.OPENSHIFT_NODEJS_PORT || process.env.PORT || c.port;
+var ipaddress = 'localhost';
+var serverport = 3000;
 http.listen(serverport, ipaddress, function() {
 	console.log('[DEBUG] Listening on ' + ipaddress + ':' + serverport);
 });
