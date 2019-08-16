@@ -66,6 +66,8 @@ def screenshot_bot(index, screen_size):
         action = move_smarter(index, screen_size, step, client.playerCoords, client.food, client.cells)
         client.take_action(action)
         step += 1
+        if step % 100 == 0:
+            print(index, "on step", step)
 
     client.register_callback("gameUpdate", on_game_update)
     client.start()
