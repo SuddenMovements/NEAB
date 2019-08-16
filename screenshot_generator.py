@@ -1,52 +1,49 @@
-from multiprocessing import Pool, Process
 from client import AgarioClient
+from math import inf, tau, sin, cos
 from noise import pnoise2
 from random import random
-from math import tau, inf, atan2
 from time import sleep
-import os
+from cv2 import imwrite
+from os import path, makedirs
 from shutil import rmtree
-import cv2
-import numpy as np
-import sys
-
-frame_save_count = 100
-frame_save_step_interval = 1
-frame_size = 900
 
 
-def move_perlin(index, step):
-    action = {}
-    action["r"] = (pnoise2(index, step * 0.01) + 1) * 200
-    action["theta"] = (pnoise2(index, step * 0.01) + 1) * tau
-    action["fire"] = False
-    action["split"] = False
-    if random() > 0.999:
-        action["fire"] = True
-    if random() > 0.999:
-        action["split"] = True
-
-    return action
-
-
-def move_smarter(index, step, screen_size, food, cells):
+def move_smarter(index, screen_size, step, playerCoords, food, cells):
     action = {}
 
     best_food = None
     best_dist = inf
-    for f in food:
-        dist = (f["x"]) ** 2 + (f["y"]) ** 2
+    for f_id in food:
+        f = food[f_id]
+        dist = (f["x"] - playerCoords["x"]) ** 2 + (f["y"] - playerCoords["y"]) ** 2
         if dist < best_dist:
             best_dist = dist
             best_food = f
     if best_food != None:
-        action["r"] = 200
-        action["theta"] = atan2(best_food["y"], best_food["x"])
+        action["x"] = best_food["x"] - playerCoords["x"]
+        action["y"] = best_food["y"] - playerCoords["y"]
     else:
-        action["r"] = (pnoise2(index, step * 0.01) + 1) * 200
-        action["theta"] = (pnoise2(index, step * 0.01) + 1) * tau
-    action["r"] += pnoise2(index, step * 0.01) * 20
-    action["theta"] += pnoise2(index, step * 0.01) * 0.5
+        action["x"] = (pnoise2(index, step * 0.01)) * 200
+        action["y"] = (pnoise2(index, step * 0.01)) * 200
+    # action["x"] += pnoise2(index, step * 0.01) * 10
+    # action["y"] += pnoise2(index, -step * 0.01) * 10
+
+    action["x"] = max(min(action["x"], screen_size / 2), -screen_size / 2)
+    action["y"] = max(min(action["y"], screen_size / 2), -screen_size / 2)
+
+    action["fire"] = random() > 0.999
+    action["split"] = random() > 0.999
+
+    return action
+
+
+def move_perlin(index, step):
+    action = {}
+    mag = (pnoise2(index, step * 0.01) + 1) * 200
+    theta = (pnoise2(index, step * 0.01) + 1) * tau
+    # print(mag, theta)
+    action["x"] = mag * cos(theta)
+    action["y"] = mag * sin(theta)
 
     action["fire"] = False
     action["split"] = False
@@ -58,79 +55,29 @@ def move_smarter(index, step, screen_size, food, cells):
     return action
 
 
-def screenshot_bot(index, screen_size, display_window):
-    step = 0
-    client = AgarioClient(index, screen_size, display_window, False)
-    frames = []
-    save_iteration = 0
-    while client.alive:
-        step += 1
-        action = move_smarter(index, step, screen_size, client.food, client.cells)
+def screenshot_bot(index, screen_size):
+    client = AgarioClient(index, screen_size, False)
+
+    def on_game_update(step):
+        frame = client.render()
+        imwrite("./game_screenshots/" + str(index) + "/" + str(step) + ".png", frame)
+        del frame
+        # action = move_perlin(index, step)
+        action = move_smarter(index, screen_size, step, client.playerCoords, client.food, client.cells)
         client.take_action(action)
-        if step % frame_save_step_interval == 0:
-            frame = client.render()
-            mass = client.playerMass
-            frames.append((frame, mass))
-            # imwrite("./game_screenshots/" + str(index) + "/" + str(int(step)) + "_" + str(int(mass)) + ".png", frame)
-            if step % (frame_save_step_interval * frame_save_count) == 0:
-                np.savez_compressed("./game_screenshots/" + str(index) + "_" + str(save_iteration), *frames)
-                del frames
-                frames = []
-                save_iteration += 1
-        else:
-            sleep(0.2)
+        step += 1
+
+    client.register_callback("gameUpdate", on_game_update)
+    client.start()
 
 
-def video_bot(index, screen_size, display_window):
-    step = 0
-    client = AgarioClient(index, screen_size, display_window, False)
-    out = cv2.VideoWriter("./videos/" + str(index) + "_video.avi", cv2.VideoWriter_fourcc(*"DIVX"), 15, (screen_size, screen_size), True)
-    while client.alive:
-        try:
-            step += 1
-            action = move_smarter(index, step, screen_size, client.food, client.cells)
-            client.take_action(action)
-            frame = client.render()
-            if step < 100:
-                continue
-            out.write(frame)
-            if step % 100 == 0:
-                print(index, "on frame", step)
-        except KeyboardInterrupt:
-            out.release()
-            print(index, "released video safely")
-            sys.exit()
-
-
-prev_image_count = 0
-
-
-def count_images():
-    image_count = 0
-    global prev_image_count
-    for dir, subdir, files in os.walk("./game_screenshots"):
-        image_count += len(files) * frame_save_count
-    if image_count == prev_image_count:
-        sleep(5)
-        count_images()
-    else:
-        print("got", image_count, "screenshots")
-        prev_image_count = image_count
-        count_images()
+def spawn(count):
+    if path.isdir("./game_screenshots"):
+        rmtree("./game_screenshots")
+    for i in range(count):
+        makedirs("./game_screenshots/" + str(i))
+        screenshot_bot(i, 600)
 
 
 if __name__ == "__main__":
-    if os.path.isdir("./game_screenshots"):
-        rmtree("./game_screenshots")
-    if os.path.isdir("./videos"):
-        rmtree("./videos")
-    os.mkdir("./game_screenshots")
-    os.mkdir("./videos")
-    bot_count = 5
-    # for i in range(bot_count):
-    #     os.makedirs("./game_screenshots/" + str(i))
-    clients = [(i, frame_size, False) for i in range(bot_count)]
-    for i in range(len(clients)):
-        Process(target=video_bot, args=clients[i]).start()
-    # Process(target=count_images).start()
-    # AgarioClient(bot_count, frame_size, True, True, True)
+    spawn(5)

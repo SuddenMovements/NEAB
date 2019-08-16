@@ -6,12 +6,11 @@ const shortid = require('shortid');
 
 const gameWidth = 5000;
 const gameHeight = 5000;
-const simulatedLag = 60;
+const simulatedLag = 10; // the number of ticks between receiving a player target and taking that action, needs to be configured
 const splitMass = 35;
-const updateRate = 60;
-// TODO these speed is currently arbitrary
-const splitSpeed = (60 / updateRate) * 25;
-const maxPlayerSpeed = (60 / updateRate) * 6.25;
+// TODO these speeds are currently arbitrary
+const splitSpeed = 25;
+const maxPlayerSpeed = 6.25;
 
 class Player {
 	constructor(socketID, playerType) {
@@ -22,7 +21,8 @@ class Player {
 		this.mass = 0;
 		this.hue = Math.round(Math.random() * 360);
 		this.type = playerType;
-		this.lastTargetUpdate = Date.now();
+		this.lastTargetUpdate = 0;
+		this.targets = [];
 		if (this.type === 'player') {
 			this.cells.push(new Cell(this, this.x, this.y, 10, { x: 0, y: 0 }, 0));
 		} else if (this.type === 'spectator') {
@@ -198,29 +198,36 @@ io.on('connection', socket => {
 			console.log('Total players: ' + Object.keys(players).length);
 			// io.emit('playerLeft', socket.id);
 			// on playerLeft client should remove all cells with matching socket.id
+			if (Object.values(players).every(val => val.lastTargetUpdate === tickCount)) {
+				// if we have received moves for every player
+				tick();
+			}
 		}
 	});
 
 	socket.on('move', newTarget => {
-		// newTarget should be an object with {x, y}
-		if (currentPlayer.lastTargetUpdate < Date.now() - 1000 / updateRate) {
-			currentPlayer.lastTargetUpdate = Date.now();
-			setTimeout(() => {
-				for (let cell of currentPlayer.cells) {
-					let x = currentPlayer.x + newTarget.x - cell.x;
-					let y = currentPlayer.y + newTarget.y - cell.y;
-					// each cell target is a vector pointing from the cell's position to the mouse
-					if (cells.where({ id: cell.id }).length === 0) {
-						// due to timeout i think cells get updated after being removed from the tree already
-						continue;
-					}
-					cells.remove(cells.where({ id: cell.id })[0]);
-					cell.target = { x: x, y: y };
-					cells.push(cell);
-				}
-			}, simulatedLag);
-		}
+		moveFunc(newTarget);
 	});
+
+	function moveFunc(newTarget) {
+		// newTarget should be an object with {x, y}
+		// if (currentPlayer.targets == undefined) {
+		// 	setTimeout(() => {
+		// 		moveFunc(newTarget);
+		// 	}, 100);
+		// 	return;
+		// }
+		currentPlayer.targets.unshift(newTarget);
+		currentPlayer.lastTargetUpdate = tickCount;
+		if (Object.values(players).every(val => val.lastTargetUpdate === tickCount)) {
+			// if we have received moves for every player
+			tick();
+		} else {
+			// for (let player of Object.values(players).filter(val => val.lastTargetUpdate !== tickCount)) {
+			// 	console.log(`waiting on player ${player.id}`);
+			// }
+		}
+	}
 
 	socket.on('fire', () => {
 		// Fire food.
@@ -275,7 +282,7 @@ io.on('connection', socket => {
 				);
 				currentPlayer.cells.push(splitCell);
 				cells.push(splitCell);
-				currentPlayer.lastSplit = Date.now();
+				currentPlayer.lastSplit = tickCount;
 			}
 		}
 		let splitCount = currentPlayer.cells.length;
@@ -283,14 +290,31 @@ io.on('connection', socket => {
 			splitCell(i);
 		}
 	});
+
+	socket.on('respawn', () => {
+		if (players[socket.id] === undefined) {
+			currentPlayer = new Player(socket.id, 'player');
+			for (let playerCell of currentPlayer.cells) {
+				cells.push(playerCell);
+			}
+			players[socket.id] = currentPlayer;
+			socket.emit('playerInfo', currentPlayer);
+		}
+	});
 });
 
 function movePlayer(player) {
+	if (player.targets.length <= simulatedLag) {
+		return;
+	}
 	var x = 0;
 	var y = 0;
+	let currentTarget = player.targets[simulatedLag];
 	for (var i = 0; i < player.cells.length; i++) {
+		let cellTargetX = player.x + currentTarget.x - player.cells[i].x;
+		let cellTargetY = player.y + currentTarget.y - player.cells[i].y;
 		cells.remove(cells.where({ id: player.cells[i].id })[0]);
-		let target = player.cells[i].target;
+		let target = { x: cellTargetX, y: cellTargetY };
 
 		var dist = Math.pow(target.y, 2) + Math.pow(target.x, 2);
 		var deg = Math.atan2(target.y, target.x);
@@ -330,7 +354,8 @@ function movePlayer(player) {
 					// https://agario.fandom.com/wiki/Splitting
 					// The cool down time is calculated as 30 seconds plus 2.33% of the cells mass
 					const cellSpread = 1;
-					if (player.lastSplit > Date.now() - 1000 * (30 + player.cells[i].mass * 0.0233)) {
+					// todo update the multiplier to work with tick rate
+					if (player.lastSplit > tickCount - 20 * (30 + player.cells[i].mass * 0.0233)) {
 						if (player.cells[i].x < player.cells[j].x) {
 							player.cells[i].x -= cellSpread;
 						} else if (player.cells[i].x > player.cells[j].x) {
@@ -371,6 +396,7 @@ function movePlayer(player) {
 	}
 	player.x = Math.round(x / player.cells.length);
 	player.y = Math.round(y / player.cells.length);
+	player.targets.pop();
 }
 
 function eatFoodPellets() {
@@ -503,6 +529,10 @@ function eatMasses() {
 function updateViruses() {
 	// let updatedViruses = [];
 	let locallyUpdatedViruses = [];
+	let virusCount = viruses.find(elem => true).length;
+	if (virusCount < 50) {
+		locallyUpdatedViruses = locallyUpdatedViruses.concat(addVirus(50 - virusCount));
+	}
 	let movingViruses = viruses.find(elem => elem.speed > 0);
 	for (let virus of movingViruses) {
 		viruses.remove(viruses.where({ id: virus.id })[0]);
@@ -563,7 +593,7 @@ function eatViruses() {
 			let splitCell = new Cell(player, cell.x, cell.y, cell.mass, target, splitSpeed);
 			player.cells.push(splitCell);
 			cells.push(splitCell);
-			player.lastSplit = Date.now();
+			player.lastSplit = tickCount;
 		}
 	}
 	// returns a list of id's of virus objects to be eaten
@@ -649,6 +679,7 @@ function playerCollisions() {
 						);
 						if (players[otherCell.playerID].cells.length === 0) {
 							io.to(otherCell.playerID).emit('dead');
+							delete players[otherCell.playerID];
 						}
 						cells.remove(cells.where({ id: otherCell.id })[0]);
 					}
@@ -684,7 +715,7 @@ function tick() {
 	}
 	massesDeleted = massesDeleted.concat(eatMasses());
 
-	// move and eat viruses
+	// add, move and eat viruses
 	for (let v of updateViruses()) {
 		updatedViruses[v.id] = v;
 	}
@@ -693,9 +724,8 @@ function tick() {
 	// and finally check for player on player collisions and eat appropriately
 	playerCollisions();
 	tickCount++;
-	if (tickCount % Math.floor(updateRate / 20) == 0) {
-		sendGameUpdatesToAllPlayers();
-	}
+	console.log(`[DEBUG] tickCount: ${tickCount}`);
+	sendGameUpdatesToAllPlayers();
 }
 
 function sendGameUpdatesToAllPlayers() {
@@ -730,14 +760,6 @@ function sendGameUpdatesToAllPlayers() {
 }
 
 generateMap();
-
-setInterval(() => {
-	tick();
-}, 1000 / updateRate);
-
-// setInterval(() => {
-// 	temp();
-// }, 1000 / 20);
 
 // Don't touch, IP configurations.
 var ipaddress = 'localhost';

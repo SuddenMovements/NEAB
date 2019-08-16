@@ -10,21 +10,13 @@ import noise
 
 
 class AgarioClient:
-    def __init__(self, index, screen_size=600, display_window=False, player_control=False, spectator=False):
+    def __init__(self, index, screen_size=600, spectator=False):
         self.socket = socketio.Client()
         self.screenWidth = screen_size
         self.screenHeight = screen_size
         self.alive = True
-        self.display_window = display_window
-        self.player_control = player_control
         self.index = str(index)
         self.spectator = spectator
-        if self.display_window:
-            cv2.namedWindow("agario" + self.index)
-            cv2.resizeWindow("agario" + self.index, self.screenWidth, self.screenHeight)
-            if self.player_control:
-                cv2.setMouseCallback("agario" + self.index, self.mouse_callback)
-        self.frame = np.full((self.screenHeight, self.screenWidth, 3), 255, np.uint8)
         self.target = {"x": 0, "y": 0}
 
         # variables needed for rendering
@@ -42,47 +34,25 @@ class AgarioClient:
 
         self.callbacks = {}
 
-        self.frame_count = 0
-        self.last_frame_time = 0
-
-        self.start()
+        # self.start()
 
     def start(self):
         self.register_socketio_callbacks()
         self.socket.connect("http://localhost:3000")
-        self.frame_count = 0
-        self.last_frame_time = time.time()
+        self.frame_number = 0
 
         if "start" in self.callbacks:
             self.callbacks["start"]()
 
-        fc = 0
-        fc_start = time.time()
-        if self.player_control:
-            while self.alive:
-                try:
-                    self.render()
-                    self.move()
-                    fc += 1
-                    if fc % 30 == 0:
-                        # print("render framerate", fc / (time.time() - fc_start))
-                        fc_start = time.time()
-                        fc = 0
-                except KeyboardInterrupt:
-                    self.stop()
-                    break
-
     def stop(self):
         self.alive = False
         self.socket.disconnect()
-        cv2.destroyAllWindows()
         if "stop" in self.callbacks:
             self.callbacks["stop"]()
 
     def register_socketio_callbacks(self):
         @self.socket.event
         def handshake():
-            # print("got handshake")
             playerInfo = {}
             if self.spectator:
                 playerInfo["type"] = "spectator"
@@ -112,9 +82,11 @@ class AgarioClient:
                 self.viruses[v["id"]] = v
             if "gameSetup" in self.callbacks:
                 self.callbacks["gameSetup"]()
+            self.move(self.target)  # to give server a move to begin gameUpdate loop
 
         @self.socket.event
         def gameUpdate(info):
+            self.frame_number += 1
             self.playerCoords = info["playerCoords"]
             self.playerMass = info["playerMass"]
             self.update_screen_size_from_mass()
@@ -141,13 +113,8 @@ class AgarioClient:
                 if v in self.viruses:
                     del self.viruses[v]
 
-            self.frame_count += 1
-            if self.frame_count % 30 == 0:
-                # print("update framerate", self.frame_count / (time.time() - self.last_frame_time))
-                self.last_frame_time = time.time()
-                self.frame_count = 0
             if "gameUpdate" in self.callbacks:
-                self.callbacks["gameUpdate"]()
+                self.callbacks["gameUpdate"](self.frame_number)
 
         @self.socket.event
         def dead():
@@ -157,27 +124,21 @@ class AgarioClient:
             self.socket.emit("respawn")
             # self.stop()
 
-    def move(self):
+    def move(self, target):
+        self.target = target
         self.socket.emit("move", self.target)
         if "move" in self.callbacks:
             self.callbacks["move"]()
 
     def fire(self):
-        # print("fire")
         self.socket.emit("fire")
         if "fire" in self.callbacks:
             self.callbacks["fire"]()
 
     def split(self):
-        # print("split")
-        self.socket.emit("split", False)
+        self.socket.emit("split")
         if "split" in self.callbacks:
             self.callbacks["split"]()
-
-    def mouse_callback(self, event, x, y, flags, param):
-        if event == cv2.EVENT_MOUSEMOVE:
-            self.target["x"] = x - self.screenWidth / 2
-            self.target["y"] = y - self.screenHeight / 2
 
     def ratio_from_mass(self, x):
         # this function is a manual approximation for the number of grid cells you can see
@@ -253,17 +214,6 @@ class AgarioClient:
             # cv2.putText(frame, entity["id"], (x, y), cv2.FONT_HERSHEY_SIMPLEX, 0.4, 255)
             # cv2.putText(frame, (str(virus["x"]) + "," + str(virus["y"])), (x, y + 10), cv2.FONT_HERSHEY_SIMPLEX, 0.4, 255)
 
-        if self.display_window:
-            cv2.imshow("agario" + self.index, frame)
-            key = cv2.waitKey(1) & 0xFF
-            if key == ord("q"):
-                self.alive = False
-                self.stop()
-            if self.player_control:
-                if key == ord("w"):
-                    self.fire()
-                if key == ord(" "):
-                    self.split()
         if "render" in self.callbacks:
             self.callbacks["render"](frame)
         return frame
@@ -271,10 +221,7 @@ class AgarioClient:
     def take_action(self, action):
         self.target["x"] = action["x"]
         self.target["y"] = action["y"]
-        # print(action)
-        # self.target["x"] = action["mag"] * math.cos(action["theta"])
-        # self.target["y"] = action["mag"] * math.sin(action["theta"])
-        self.move()
+        self.move(self.target)
         if action["fire"]:
             self.fire()
 
@@ -291,7 +238,3 @@ class AgarioClient:
             self.callbacks[event_name] = callback
         else:
             raise KeyError(event_name + " callback already registered!")
-
-
-if __name__ == "__main__":
-    client = AgarioClient(16, 600, True, True, False)
