@@ -302,6 +302,12 @@ io.on('connection', socket => {
 			}
 			players[socket.id] = currentPlayer;
 			socket.emit('playerInfo', currentPlayer);
+			socket.emit('gameSetup', {
+				food: food.find(elem => true),
+				cells: cells.find(elem => true),
+				masses: masses.find(elem => true),
+				viruses: viruses.find(elem => true)
+			});
 		}
 	});
 });
