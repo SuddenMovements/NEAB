@@ -58,7 +58,7 @@ class Food {
 		this.y = y;
 		this.hue = Math.round(Math.random() * 360);
 		this.r = 14;
-		this.mass = 10;
+		this.mass = 1;
 	}
 }
 
