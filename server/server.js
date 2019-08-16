@@ -6,11 +6,14 @@ const shortid = require('shortid');
 
 const gameWidth = 5000;
 const gameHeight = 5000;
-const simulatedLag = 10; // the number of ticks between receiving a player target and taking that action, needs to be configured
+const simulatedLag = 8; // the number of ticks between receiving a player target and taking that action, needs to be configured
 const splitMass = 35;
 // TODO these speeds are currently arbitrary
-const splitSpeed = 25;
-const maxPlayerSpeed = 6.25;
+const splitSpeed = 25 * 4;
+const maxPlayerSpeed = 6.25 * 4;
+// assuming the bot could feasibly run at 15fps
+// the original clone had speeds of 25 and 6.25 and was intended to run at 60fps
+// so multiply by 60/15 = 4
 
 class Player {
 	constructor(socketID, playerType) {

@@ -82,4 +82,9 @@ def spawn(count):
 
 
 if __name__ == "__main__":
-    spawn(5)
+    import argparse
+
+    parser = argparse.ArgumentParser()
+    parser.add_argument("bot_count")
+    args = parser.parse_args()
+    spawn(int(args.bot_count))
