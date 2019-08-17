@@ -78,6 +78,8 @@ def screenshot_bot(index, screen_size, record=True, target_frame_count=0):
 
 
 def spawn(total_bot_count, recording_bot_count, total_frames):
+    print("generating a target {} frames with {} recording bots".format(total_frames, recording_bot_count))
+    print("will run until step {}".format(ceil(total_frames / recording_bot_count)))
     if path.isdir("./game_screenshots"):
         rmtree("./game_screenshots")
     i = 0
