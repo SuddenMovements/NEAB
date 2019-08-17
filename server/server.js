@@ -203,7 +203,6 @@ io.on('connection', socket => {
 			// io.emit('playerLeft', socket.id);
 			// on playerLeft client should remove all cells with matching socket.id
 			if (Object.values(players).every(val => val.lastTargetUpdate === tickCount)) {
-				// if we have received moves for every player
 				tick();
 			}
 		}
