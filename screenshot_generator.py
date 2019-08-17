@@ -63,12 +63,12 @@ def screenshot_bot(index, screen_size, record=True):
             frame = client.render()
             imwrite("./game_screenshots/" + str(index) + "/" + str(step) + ".png", frame)
             del frame
+            if step % 100 == 0:
+                print(index, "on step", step)
         # action = move_perlin(index, step)
         action = move_smarter(index, screen_size, step, client.playerCoords, client.food, client.cells)
         client.take_action(action)
         step += 1
-        if step % 100 == 0:
-            print(index, "on step", step)
 
     client.register_callback("gameUpdate", on_game_update)
     client.start()
