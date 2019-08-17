@@ -111,15 +111,16 @@ function massToSlowdown(mass) {
 
 function getUniformPosition(points) {
 	let bestPos = { x: 0, y: 0 };
-	let bestDist = Infinity;
+	let bestDist = 0;
 	for (let i = 0; i < 10; i++) {
-		let dist = 0;
+		let dist = Infinity;
 		let pos = { x: Math.round(Math.random() * gameWidth), y: Math.round(Math.random() * gameHeight) };
 		for (let point of points) {
-			dist += (point.x - pos.x) * (point.x - pos.x) + (point.y - pos.y) * (point.y - pos.y);
+			dist = Math.min(dist, (point.x - pos.x) * (point.x - pos.x) + (point.y - pos.y) * (point.y - pos.y));
 		}
-		if (dist < bestDist) {
+		if (dist > bestDist) {
 			bestPos = pos;
+			bestDist = dist;
 		}
 	}
 	return bestPos;
@@ -144,9 +145,10 @@ function addFood(numberFoodToAdd) {
 }
 
 function addVirus(numberVirusToAdd) {
+	let allViruses = viruses.find(elem => true);
 	let newViruses = [];
 	for (let i = 0; i < numberVirusToAdd; i++) {
-		let pos = getUniformPosition(newViruses);
+		let pos = getUniformPosition(newViruses.concat(allViruses));
 		newViruses.push(new Virus(pos.x, pos.y, 100, 0, null));
 	}
 	viruses.pushAll(newViruses);
@@ -312,7 +314,7 @@ io.on('connection', socket => {
 	});
 });
 
-function movePlayer(player) {
+function moveAndDecayPlayer(player) {
 	if (player.targets.length <= simulatedLag) {
 		return;
 	}
@@ -320,6 +322,16 @@ function movePlayer(player) {
 	var y = 0;
 	let currentTarget = player.targets[simulatedLag];
 	for (var i = 0; i < player.cells.length; i++) {
+		// decay
+		// TODO find source for this supposed decay rate
+		// if (tickCount % 15 == 0) {
+		player.cells[i].mass *= 1 - 0.002;
+		if (player.cells[i].mass < 10) {
+			player.cells[i].mass = 10;
+		}
+		// }
+
+		// movement
 		let cellTargetX = player.x + currentTarget.x - player.cells[i].x;
 		let cellTargetY = player.y + currentTarget.y - player.cells[i].y;
 		cells.remove(cells.where({ id: player.cells[i].id })[0]);
@@ -540,10 +552,6 @@ function eatMasses() {
 function updateViruses() {
 	// let updatedViruses = [];
 	let locallyUpdatedViruses = [];
-	let virusCount = viruses.find(elem => true).length;
-	if (virusCount < 50) {
-		locallyUpdatedViruses = locallyUpdatedViruses.concat(addVirus(50 - virusCount));
-	}
 	let movingViruses = viruses.find(elem => elem.speed > 0);
 	for (let virus of movingViruses) {
 		viruses.remove(viruses.where({ id: virus.id })[0]);
@@ -713,13 +721,10 @@ function tick() {
 	// in tick
 	// move all players
 	for (let player of Object.values(players)) {
-		movePlayer(player);
+		moveAndDecayPlayer(player);
 	}
 	// eat food
 	foodDeleted = foodDeleted.concat(eatFoodPellets());
-	for (let f of addFood(1000 - food.find(elem => true).length)) {
-		foodAdded[f.id] = f;
-	}
 
 	// move and eat masses
 	for (let m of moveMasses()) {
@@ -727,7 +732,7 @@ function tick() {
 	}
 	massesDeleted = massesDeleted.concat(eatMasses());
 
-	// add, move and eat viruses
+	// move and eat viruses
 	for (let v of updateViruses()) {
 		updatedViruses[v.id] = v;
 	}
@@ -735,6 +740,24 @@ function tick() {
 
 	// and finally check for player on player collisions and eat appropriately
 	playerCollisions();
+
+	// now that we have updated all masses, sum the total mass of the game and split it amongst new viruses and new food
+	let totalMass = 0;
+	cells.each(elem => (totalMass += elem.mass));
+	food.each(elem => (totalMass += elem.mass));
+	masses.each(elem => (totalMass += elem.mass));
+	viruses.each(elem => (totalMass += elem.mass));
+
+	let missingMass = 20000 - totalMass;
+	let newFoodCount = Math.min(1000, missingMass * 0.8);
+	for (let f of addFood(newFoodCount)) {
+		foodAdded[f.id] = f;
+	}
+	let newVirusCount = Math.min(50, (missingMass - newFoodCount) / 100);
+	for (let v of addVirus(newVirusCount)) {
+		updatedViruses[v.id] = v;
+	}
+
 	tickCount++;
 	console.log(`[DEBUG] tickCount: ${tickCount}`);
 	sendGameUpdatesToAllPlayers();
