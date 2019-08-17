@@ -6,11 +6,12 @@ const shortid = require('shortid');
 
 const gameWidth = 5000;
 const gameHeight = 5000;
-const simulatedLag = 8; // the number of ticks between receiving a player target and taking that action, needs to be configured
+const simulatedLag = 2; // the number of ticks between receiving a player target and taking that action, needs to be configured
+const tickMultiplierFromFramerate = 4;
 const splitMass = 35;
 // TODO these speeds are currently arbitrary
-const splitSpeed = 25 * 4;
-const maxPlayerSpeed = 6.25 * 4;
+const splitSpeed = 25 * tickMultiplierFromFramerate;
+const maxPlayerSpeed = 6.25 * tickMultiplierFromFramerate;
 // assuming the bot could feasibly run at 15fps
 // the original clone had speeds of 25 and 6.25 and was intended to run at 60fps
 // so multiply by 60/15 = 4
@@ -58,7 +59,7 @@ class Food {
 		this.y = y;
 		this.hue = Math.round(Math.random() * 360);
 		this.r = 14;
-		this.mass = 1;
+		this.mass = 10;
 	}
 }
 
@@ -324,7 +325,7 @@ function movePlayer(player) {
 		let cellTargetY = player.y + currentTarget.y - player.cells[i].y;
 		cells.remove(cells.where({ id: player.cells[i].id })[0]);
 		let target = { x: cellTargetX, y: cellTargetY };
-
+		player.cells[i].target = target;
 		var dist = Math.pow(target.y, 2) + Math.pow(target.x, 2);
 		var deg = Math.atan2(target.y, target.x);
 		var slowDown = 1;
@@ -341,7 +342,8 @@ function movePlayer(player) {
 		var deltaX = (player.cells[i].speed * Math.cos(deg)) / slowDown;
 
 		if (player.cells[i].speed > maxPlayerSpeed) {
-			player.cells[i].speed -= 0.5;
+			// player.cells[i].speed -= 0.5 * 4;
+			player.cells[i].speed *= 0.8;
 		}
 
 		deltaX = Math.round(deltaX);
@@ -362,18 +364,17 @@ function movePlayer(player) {
 				if (distance < radiusTotal) {
 					// https://agario.fandom.com/wiki/Splitting
 					// The cool down time is calculated as 30 seconds plus 2.33% of the cells mass
-					const cellSpread = 1;
 					// todo update the multiplier to work with tick rate
-					if (player.lastSplit > tickCount - 20 * (30 + player.cells[i].mass * 0.0233)) {
+					if (player.lastSplit > tickCount - 15 * (30 + player.cells[i].mass * 0.0233)) {
 						if (player.cells[i].x < player.cells[j].x) {
-							player.cells[i].x -= cellSpread;
+							player.cells[i].x -= tickMultiplierFromFramerate;
 						} else if (player.cells[i].x > player.cells[j].x) {
-							player.cells[i].x += cellSpread;
+							player.cells[i].x += tickMultiplierFromFramerate;
 						}
 						if (player.cells[i].y < player.cells[j].y) {
-							player.cells[i].y -= cellSpread;
+							player.cells[i].y -= tickMultiplierFromFramerate;
 						} else if (player.cells[i].y > player.cells[j].y) {
-							player.cells[i].y += cellSpread;
+							player.cells[i].y += tickMultiplierFromFramerate;
 						}
 					} else if (distance < radiusTotal / 1.75) {
 						player.cells[i].mass += player.cells[j].mass;
@@ -388,6 +389,7 @@ function movePlayer(player) {
 				}
 			}
 		}
+
 		if (player.cells[i].x < 0) {
 			player.cells[i].x = 0;
 		} else if (player.cells[i].x > gameWidth) {
@@ -454,6 +456,7 @@ function moveMasses() {
 		let deltaX = mass.speed * Math.cos(deg);
 		let deltaY = mass.speed * Math.sin(deg);
 
+		mass.speed *= 0.8;
 		mass.speed -= 0.5;
 		if (mass.speed < 0) {
 			mass.speed = 0;
@@ -549,6 +552,7 @@ function updateViruses() {
 		let deltaX = virus.speed * Math.cos(deg);
 		let deltaY = virus.speed * Math.sin(deg);
 
+		virus.speed *= 0.8;
 		virus.speed -= 0.5;
 		if (virus.speed < 0) {
 			virus.speed = 0;

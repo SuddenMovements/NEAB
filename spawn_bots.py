@@ -55,44 +55,28 @@ def move_perlin(index, step):
     return action
 
 
-def screenshot_bot(index, screen_size, record=True):
+def bot(index, screen_size):
     client = AgarioClient(index, screen_size, False)
 
     def on_game_update(step):
-        if record:
-            frame = client.render()
-            imwrite("./game_screenshots/" + str(index) + "/" + str(step) + ".png", frame)
-            del frame
         # action = move_perlin(index, step)
         action = move_smarter(index, screen_size, step, client.playerCoords, client.food, client.cells)
         client.take_action(action)
         step += 1
-        if step % 100 == 0:
-            print(index, "on step", step)
 
     client.register_callback("gameUpdate", on_game_update)
     client.start()
 
 
-def spawn(total_bot_count, recording_bot_count):
-    if path.isdir("./game_screenshots"):
-        rmtree("./game_screenshots")
-    i = 0
-    while i < recording_bot_count:
-        makedirs("./game_screenshots/" + str(i))
-        screenshot_bot(i, 512, True)
-        i += 1
-    while i < total_bot_count:
-        screenshot_bot(i, 512, record=False)
-        i += 1
+def spawn(count):
+    for i in range(count):
+        bot(i, 600)
 
 
 if __name__ == "__main__":
     import argparse
 
     parser = argparse.ArgumentParser()
-    parser.add_argument("total_bot_count")
-    parser.add_argument("recording_bot_count")
+    parser.add_argument("bot_count")
     args = parser.parse_args()
-    assert int(args.total_bot_count) >= int(args.recording_bot_count)
-    spawn(int(args.total_bot_count), int(args.recording_bot_count))
+    spawn(int(args.bot_count))
