@@ -25,14 +25,14 @@ def move_smarter(index, screen_size, step, playerCoords, food, cells):
     else:
         action["x"] = (pnoise2(index, step * 0.01)) * 200
         action["y"] = (pnoise2(index, step * 0.01)) * 200
-    # action["x"] += pnoise2(index, step * 0.01) * 10
-    # action["y"] += pnoise2(index, -step * 0.01) * 10
+    action["x"] += pnoise2(index, step * 0.01) * 30
+    action["y"] += pnoise2(index, -step * 0.01) * 30
 
     action["x"] = max(min(action["x"], screen_size / 2), -screen_size / 2)
     action["y"] = max(min(action["y"], screen_size / 2), -screen_size / 2)
 
-    action["fire"] = random() > 0.999
-    action["split"] = random() > 0.999
+    action["fire"] = random() > 0.99
+    action["split"] = random() > 0.99
 
     return action
 

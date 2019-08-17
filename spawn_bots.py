@@ -6,53 +6,7 @@ from time import sleep
 from cv2 import imwrite
 from os import path, makedirs
 from shutil import rmtree
-
-
-def move_smarter(index, screen_size, step, playerCoords, food, cells):
-    action = {}
-
-    best_food = None
-    best_dist = inf
-    for f_id in food:
-        f = food[f_id]
-        dist = (f["x"] - playerCoords["x"]) ** 2 + (f["y"] - playerCoords["y"]) ** 2
-        if dist < best_dist:
-            best_dist = dist
-            best_food = f
-    if best_food != None:
-        action["x"] = best_food["x"] - playerCoords["x"]
-        action["y"] = best_food["y"] - playerCoords["y"]
-    else:
-        action["x"] = (pnoise2(index, step * 0.01)) * 200
-        action["y"] = (pnoise2(index, step * 0.01)) * 200
-    # action["x"] += pnoise2(index, step * 0.01) * 10
-    # action["y"] += pnoise2(index, -step * 0.01) * 10
-
-    action["x"] = max(min(action["x"], screen_size / 2), -screen_size / 2)
-    action["y"] = max(min(action["y"], screen_size / 2), -screen_size / 2)
-
-    action["fire"] = random() > 0.999
-    action["split"] = random() > 0.999
-
-    return action
-
-
-def move_perlin(index, step):
-    action = {}
-    mag = (pnoise2(index, step * 0.01) + 1) * 200
-    theta = (pnoise2(index, step * 0.01) + 1) * tau
-    # print(mag, theta)
-    action["x"] = mag * cos(theta)
-    action["y"] = mag * sin(theta)
-
-    action["fire"] = False
-    action["split"] = False
-    if random() > 0.999:
-        action["fire"] = True
-    if random() > 0.999:
-        action["split"] = True
-
-    return action
+from screenshot_generator import move_smarter
 
 
 def bot(index, screen_size):
