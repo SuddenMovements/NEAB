@@ -6,6 +6,9 @@ const shortid = require('shortid');
 
 const gameWidth = 5000;
 const gameHeight = 5000;
+const maxFood = 2000;
+const maxViruses = 50;
+const maxGameMass = 20000;
 const simulatedLag = 2; // the number of ticks between receiving a player target and taking that action, needs to be configured
 const tickMultiplierFromFramerate = 4;
 const splitMass = 35;
@@ -109,10 +112,10 @@ function massToSlowdown(mass) {
 	return Math.log2(mass / 10) / slowdownBaseLog + 1;
 }
 
-function getUniformPosition(points) {
-	let bestPos = { x: 0, y: 0 };
+function getUniformPosition(points, k) {
+	let bestPos = { x: Math.round(Math.random() * gameWidth), y: Math.round(Math.random() * gameHeight) };
 	let bestDist = 0;
-	for (let i = 0; i < 10; i++) {
+	for (let i = 0; i < k; i++) {
 		let dist = Infinity;
 		let pos = { x: Math.round(Math.random() * gameWidth), y: Math.round(Math.random() * gameHeight) };
 		for (let point of points) {
@@ -137,18 +140,23 @@ function addFood(numberFoodToAdd) {
 	}
 	// console.log(`[DEBUG] adding ${numberFoodToAdd} food`);
 	let newFood = [];
+	let allFood = food.find(elem => true);
 	for (let i = 0; i < numberFoodToAdd; i++) {
-		newFood.push(new Food(Math.floor(Math.random() * gameWidth), Math.floor(Math.random() * gameHeight)));
+		let pos = getUniformPosition(newFood.concat(allFood), 3);
+		newFood.push(new Food(pos.x, pos.y));
 	}
 	food.pushAll(newFood);
 	return newFood;
 }
 
 function addVirus(numberVirusToAdd) {
+	if (numberVirusToAdd <= 0) {
+		return [];
+	}
 	let allViruses = viruses.find(elem => true);
 	let newViruses = [];
 	for (let i = 0; i < numberVirusToAdd; i++) {
-		let pos = getUniformPosition(newViruses.concat(allViruses));
+		let pos = getUniformPosition(newViruses.concat(allViruses), 5);
 		newViruses.push(new Virus(pos.x, pos.y, 100, 0, null));
 	}
 	viruses.pushAll(newViruses);
@@ -160,8 +168,8 @@ function generateMap() {
 	cells.clear();
 	masses.clear();
 	viruses.clear();
-	addFood(1000);
-	addVirus(50);
+	addFood(maxFood);
+	addVirus(maxViruses);
 }
 
 io.on('connection', socket => {
@@ -324,12 +332,12 @@ function moveAndDecayPlayer(player) {
 	for (var i = 0; i < player.cells.length; i++) {
 		// decay
 		// TODO find source for this supposed decay rate
-		// if (tickCount % 15 == 0) {
-		player.cells[i].mass *= 1 - 0.002;
-		if (player.cells[i].mass < 10) {
-			player.cells[i].mass = 10;
+		if (tickCount % 15 == 0) {
+			player.cells[i].mass *= 1 - 0.002;
+			if (player.cells[i].mass < 10) {
+				player.cells[i].mass = 10;
+			}
 		}
-		// }
 
 		// movement
 		let cellTargetX = player.x + currentTarget.x - player.cells[i].x;
@@ -743,17 +751,25 @@ function tick() {
 
 	// now that we have updated all masses, sum the total mass of the game and split it amongst new viruses and new food
 	let totalMass = 0;
+	let foodCount = 0;
+	let virusCount = 0;
 	cells.each(elem => (totalMass += elem.mass));
-	food.each(elem => (totalMass += elem.mass));
+	food.each(elem => {
+		totalMass += elem.mass;
+		foodCount++;
+	});
 	masses.each(elem => (totalMass += elem.mass));
-	viruses.each(elem => (totalMass += elem.mass));
+	viruses.each(elem => {
+		totalMass += elem.mass;
+		virusCount++;
+	});
 
-	let missingMass = 20000 - totalMass;
-	let newFoodCount = Math.min(1000, missingMass * 0.8);
+	let missingMass = maxGameMass - totalMass;
+	let newFoodCount = Math.min(maxFood - foodCount, missingMass * 0.8);
 	for (let f of addFood(newFoodCount)) {
 		foodAdded[f.id] = f;
 	}
-	let newVirusCount = Math.min(50, (missingMass - newFoodCount) / 100);
+	let newVirusCount = Math.min(maxViruses - virusCount, (missingMass - newFoodCount) / 100);
 	for (let v of addVirus(newVirusCount)) {
 		updatedViruses[v.id] = v;
 	}

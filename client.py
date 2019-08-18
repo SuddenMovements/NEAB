@@ -27,6 +27,7 @@ class AgarioClient:
         self.ratio = 1
         self.playerMass = 10
         self.playerCoords = {"x": 0, "y": 0}
+        self.playerID = ""
 
         self.virusFill = list(map(lambda x: int(x * 255), hex2color("#33ff33")))
         self.virusStroke = list(map(lambda x: int(x * 255), hex2color("#19D119")))
@@ -66,6 +67,7 @@ class AgarioClient:
         def playerInfo(info):
             self.playerCoords = {"x": info["x"], "y": info["y"]}
             self.playerMass = info["mass"]
+            self.playerID = info["id"]
             self.update_screen_size_from_mass()
             if "playerInfo" in self.callbacks:
                 self.callbacks["playerInfo"]()
@@ -198,6 +200,8 @@ class AgarioClient:
 
             col = (cell["hue"], 255, 255)
             frame = cv2.circle(frame, (x, y), r, col, cv2.FILLED)
+            if self.spectator:
+                frame = cv2.arrowedLine(frame, (x, y), (x + cell["target"]["x"], y + cell["target"]["y"]), (0, 255, 255), 2)
 
         frame = cv2.cvtColor(frame, cv2.COLOR_HSV2BGR)
 

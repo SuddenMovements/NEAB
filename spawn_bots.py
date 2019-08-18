@@ -14,7 +14,7 @@ def bot(index, screen_size):
 
     def on_game_update(step):
         # action = move_perlin(index, step)
-        action = move_smarter(index, screen_size, step, client.playerCoords, client.food, client.cells)
+        action = move_smarter(index, step, client)
         client.take_action(action)
         step += 1
 
