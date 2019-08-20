@@ -8,6 +8,10 @@ from os import path, makedirs
 from shutil import rmtree
 
 
+"""Screenshot generator script used to collect datasets for VAE training.
+To get started, run the server.js file inside server/ and then run this script."""
+
+
 def move_smarter(index, step, client):
     action = {"x": 0, "y": 0, "fire": False, "split": False}
 
@@ -99,8 +103,6 @@ def screenshot_bot(index, screen_size, record=True, target_frame_count=0):
 def spawn(total_bot_count, recording_bot_count, total_frames):
     print("generating a target {} frames with {} recording bots".format(total_frames, recording_bot_count))
     print("will run until step {}".format(ceil(total_frames / recording_bot_count)))
-    if path.isdir("./game_screenshots"):
-        rmtree("./game_screenshots")
     i = 0
     while i < recording_bot_count:
         makedirs("./game_screenshots/" + str(i))
@@ -120,4 +122,8 @@ if __name__ == "__main__":
     parser.add_argument("total_frames")
     args = parser.parse_args()
     assert int(args.total_bot_count) >= int(args.recording_bot_count)
+
+    if path.isdir("./game_screenshots"):
+        rmtree("./game_screenshots")
+    makedirs("./game_screenshots")
     spawn(int(args.total_bot_count), int(args.recording_bot_count), int(args.total_frames))
