@@ -107,11 +107,14 @@ def spawn(total_bot_count, recording_bot_count, total_frames, frame_size):
 
     if os.path.exists("game_screenshots"):
         rmtree("game_screenshots")
+        
+    os.mkdir("game_screenshots")
+
 
     i = 0
     while i < recording_bot_count:
         print(i)
-        os.makedirs(f"game_screenshots/{i}/", exist_ok=True)
+        os.mkdir(f"game_screenshots/{i}/")
         screenshot_bot(i, frame_size, record=True, target_frame_count=ceil(total_frames / recording_bot_count) + 1)
         i += 1
         time.sleep(0.1)
