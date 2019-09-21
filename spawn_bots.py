@@ -31,6 +31,6 @@ if __name__ == "__main__":
     import argparse
 
     parser = argparse.ArgumentParser()
-    parser.add_argument("bot_count")
+    parser.add_argument("--bot_count", type=int, default=5, help="number of bots")
     args = parser.parse_args()
-    spawn(int(args.bot_count))
+    spawn(args.bot_count)

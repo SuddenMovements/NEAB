@@ -4,8 +4,10 @@ from noise import pnoise2
 from random import random
 from time import sleep
 from cv2 import imwrite
-from os import path, makedirs
 from shutil import rmtree
+import time
+
+import os
 
 
 """Screenshot generator script used to collect datasets for VAE training.
@@ -13,6 +15,9 @@ To get started, run the server.js file inside server/ and then run this script."
 
 
 def move_smarter(index, step, client):
+    """
+    Bot is moved using perlin noise.
+    """
     action = {"x": 0, "y": 0, "fire": False, "split": False}
 
     best_food = None
@@ -88,7 +93,7 @@ def screenshot_bot(index, screen_size, record=True, target_frame_count=0):
             return
         if record:
             frame = client.render()
-            imwrite("./game_screenshots/" + str(index) + "/" + str(step) + ".png", frame)
+            imwrite(f"./game_screenshots/{index}/{step}.png", frame)
             del frame
             if step % 100 == 0:
                 print(index, "on step", step)
@@ -100,30 +105,39 @@ def screenshot_bot(index, screen_size, record=True, target_frame_count=0):
     client.start()
 
 
-def spawn(total_bot_count, recording_bot_count, total_frames):
-    print("generating a target {} frames with {} recording bots".format(total_frames, recording_bot_count))
+def spawn(total_bot_count, recording_bot_count, total_frames, frame_size):
+    print("generating a target {} frames with {} recording bots on a game with {} bots".format(total_frames, recording_bot_count, total_bot_count))
     print("will run until step {}".format(ceil(total_frames / recording_bot_count)))
+
+    if os.path.exists("game_screenshots"):
+        rmtree("game_screenshots")
+        
+    os.mkdir("game_screenshots")
     i = 0
     while i < recording_bot_count:
-        makedirs("./game_screenshots/" + str(i))
-        screenshot_bot(i, 512, record=True, target_frame_count=ceil(total_frames / recording_bot_count) + 1)
+        print(i)
+        os.mkdir(f"game_screenshots/{i}/")
+        screenshot_bot(i, frame_size, record=True, target_frame_count=ceil(total_frames / recording_bot_count) + 1)
         i += 1
+        time.sleep(0.1)
+
+    # Continue Making not record bot
     while i < total_bot_count:
-        screenshot_bot(i, 512, record=False, target_frame_count=ceil(total_frames / recording_bot_count) + 1)
+        screenshot_bot(i, frame_size, record=False, target_frame_count=ceil(total_frames / recording_bot_count) + 1)
         i += 1
 
 
 if __name__ == "__main__":
     import argparse
 
-    parser = argparse.ArgumentParser()
-    parser.add_argument("total_bot_count")
-    parser.add_argument("recording_bot_count")
-    parser.add_argument("total_frames")
+    parser = argparse.ArgumentParser(description="Generating Screenshot for training vision model")
+    parser.add_argument("--total-bot-count", type=int, default=5, help="number of bots in the environment")
+    parser.add_argument("--recording-bot-count", type=int, default=3, help="number of bot observations we want to record")
+    parser.add_argument("--total-frames", type=int, default=1000, help="number of frames we would like to observe (per bot)")
+    parser.add_argument("--frame-size", type=int, default=512, help="size of recorded frame")
     args = parser.parse_args()
-    assert int(args.total_bot_count) >= int(args.recording_bot_count)
 
-    if path.isdir("./game_screenshots"):
-        rmtree("./game_screenshots")
-    makedirs("./game_screenshots")
-    spawn(int(args.total_bot_count), int(args.recording_bot_count), int(args.total_frames))
+    if args.total_bot_count < args.recording_bot_count:
+        raise ValueError("The number of recording bot has to be less than the total number of bots")
+
+    spawn(args.total_bot_count, args.recording_bot_count, args.total_frames, args.frame_size)
