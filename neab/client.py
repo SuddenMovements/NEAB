@@ -74,7 +74,7 @@ class AgarioClient:
 
         @self.socket.event
         def gameSetup(mapObject):
-            print(self.index, "got gamesetup")
+            # print(self.index, "got gamesetup")
             self.cells = mapObject["cells"]
             for f in mapObject["food"]:
                 self.food[f["id"]] = f
@@ -220,7 +220,7 @@ class AgarioClient:
 
         if "render" in self.callbacks:
             self.callbacks["render"](frame)
-        return frame
+        return frame/255
 
     def take_action(self, action):
         self.target["x"] = action["x"]
@@ -235,8 +235,21 @@ class AgarioClient:
             self.callbacks["take_action"]()
 
     def register_callback(self, event_name, callback):
-        """Socket.io callbacks are: handshake, playerInfo, gameSetup, gameUpdate, dead.
-        Class callbacks are: start, stop, move, fire, split, render, take_action.
+        """
+        Socket.io callbacks are:
+            handshake
+            playerInfo
+            gameSetup
+            gameUpdate
+            dead
+        Class callbacks are:
+            start
+            stop
+            move
+            fire
+            split
+            render
+            take_action
         """
         if not event_name in self.callbacks:
             self.callbacks[event_name] = callback

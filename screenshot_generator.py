@@ -1,4 +1,3 @@
-from client import AgarioClient
 from math import inf, tau, sin, cos, ceil
 from noise import pnoise2
 from random import random
@@ -6,8 +5,10 @@ from time import sleep
 from cv2 import imwrite
 from shutil import rmtree
 import time
-
 import os
+
+from neab.client import AgarioClient
+from neab.defaultBot import move_perlin
 
 
 """Screenshot generator script used to collect datasets for VAE training.
@@ -65,24 +66,6 @@ def move_smarter(index, step, client):
     return action
 
 
-def move_perlin(index, step):
-    action = {}
-    mag = (pnoise2(index, step * 0.01) + 1) * 200
-    theta = (pnoise2(index, step * 0.01) + 1) * tau
-    # print(mag, theta)
-    action["x"] = mag * cos(theta)
-    action["y"] = mag * sin(theta)
-
-    action["fire"] = False
-    action["split"] = False
-    if random() > 0.999:
-        action["fire"] = True
-    if random() > 0.999:
-        action["split"] = True
-
-    return action
-
-
 def screenshot_bot(index, screen_size, record=True, target_frame_count=0):
     client = AgarioClient(index, screen_size, False)
 
@@ -111,7 +94,7 @@ def spawn(total_bot_count, recording_bot_count, total_frames, frame_size):
 
     if os.path.exists("game_screenshots"):
         rmtree("game_screenshots")
-        
+
     os.mkdir("game_screenshots")
     i = 0
     while i < recording_bot_count:
