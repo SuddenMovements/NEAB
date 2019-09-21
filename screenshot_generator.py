@@ -10,6 +10,10 @@ import time
 import os
 
 
+"""Screenshot generator script used to collect datasets for VAE training.
+To get started, run the server.js file inside server/ and then run this script."""
+
+
 def move_smarter(index, step, client):
     """
     Bot is moved using perlin noise.
@@ -109,8 +113,6 @@ def spawn(total_bot_count, recording_bot_count, total_frames, frame_size):
         rmtree("game_screenshots")
         
     os.mkdir("game_screenshots")
-
-
     i = 0
     while i < recording_bot_count:
         print(i)
