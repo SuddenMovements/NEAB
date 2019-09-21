@@ -4,7 +4,9 @@ from gym.utils import seeding
 
 
 class AgarioEnv(gym.Env):
-    """An agar.io environment for OpenAI gym"""
+    """
+    An agar.io client environment using OpenAI gym
+    """
 
     metadata = {"render.modes": ["human"]}
 
@@ -46,4 +48,3 @@ class AgarioEnv(gym.Env):
         for blob in self.blobs:
             blob.disconnect()
             del blob
-
