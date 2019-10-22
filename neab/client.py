@@ -220,7 +220,7 @@ class AgarioClient:
 
         if "render" in self.callbacks:
             self.callbacks["render"](frame)
-        return frame/255
+        return frame
 
     def take_action(self, action):
         self.target["x"] = action["x"]
